@@ -86,6 +86,7 @@ import {
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
+  type GitHubAccountSelection,
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
@@ -2852,19 +2853,26 @@ export default function Sidebar() {
   };
 
   const handleCloneGitHubProject = useCallback(
-    async (repository: string) => {
+    async (repository: string, account: GitHubAccountSelection) => {
       const api = readNativeApi();
       if (!api) throw new Error("Synara is not connected to the local server.");
-      const cloned = await api.git.cloneRepository({ repository });
+      const cloned = await api.git.cloneRepository({ repository, account });
       await addProjectFromPath(cloned.path);
     },
     [addProjectFromPath],
   );
 
-  const handleListGitHubRepositories = useCallback(async () => {
+  const handleListGitHubAccounts = useCallback(async () => {
     const api = readNativeApi();
     if (!api) throw new Error("Synara is not connected to the local server.");
-    const result = await api.git.listGitHubRepositories({});
+    const result = await api.git.listGitHubAccounts({});
+    return result.accounts;
+  }, []);
+
+  const handleListGitHubRepositories = useCallback(async (account: GitHubAccountSelection) => {
+    const api = readNativeApi();
+    if (!api) throw new Error("Synara is not connected to the local server.");
+    const result = await api.git.listGitHubRepositories({ account });
     return result.repositories;
   }, []);
 
@@ -8100,6 +8108,7 @@ export default function Sidebar() {
         open={githubProjectDialogOpen}
         onOpenChange={setGitHubProjectDialogOpen}
         onClone={handleCloneGitHubProject}
+        onListAccounts={handleListGitHubAccounts}
         onListRepositories={handleListGitHubRepositories}
       />
 

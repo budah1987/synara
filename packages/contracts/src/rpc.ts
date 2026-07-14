@@ -26,6 +26,8 @@ import {
   GitActionProgressEvent,
   GitCloneRepositoryInput,
   GitCloneRepositoryResult,
+  GitHubListAccountsInput,
+  GitHubListAccountsResult,
   GitHubListRepositoriesInput,
   GitHubListRepositoriesResult,
   GitCreateBranchInput,
@@ -574,6 +576,12 @@ export const WsGitCloneRepositoryRpc = Rpc.make(WS_METHODS.gitCloneRepository, {
   error: WsRpcError,
 });
 
+export const WsGitListGitHubAccountsRpc = Rpc.make(WS_METHODS.gitListGitHubAccounts, {
+  payload: GitHubListAccountsInput,
+  success: GitHubListAccountsResult,
+  error: WsRpcError,
+});
+
 export const WsGitListGitHubRepositoriesRpc = Rpc.make(WS_METHODS.gitListGitHubRepositories, {
   payload: GitHubListRepositoriesInput,
   success: GitHubListRepositoriesResult,
@@ -996,6 +1004,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCreateBranchRpc,
   WsGitRenameBranchRpc,
   WsGitCloneRepositoryRpc,
+  WsGitListGitHubAccountsRpc,
   WsGitListGitHubRepositoriesRpc,
   WsGitCheckoutRpc,
   WsGitStashAndCheckoutRpc,

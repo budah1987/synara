@@ -1,4 +1,8 @@
-import type { GitHubRepositorySummary } from "@synara/contracts";
+import type {
+  GitHubAccountSelection,
+  GitHubAccountSummary,
+  GitHubRepositorySummary,
+} from "@synara/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FiGithub } from "react-icons/fi";
 import { ArchiveIcon, CheckIcon, LockIcon, SearchIcon } from "~/lib/icons";
@@ -15,16 +19,24 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Spinner } from "./ui/spinner";
 
 interface GitHubProjectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onClone: (repository: string) => Promise<void>;
-  onListRepositories: () => Promise<readonly GitHubRepositorySummary[]>;
+  onClone: (repository: string, account: GitHubAccountSelection) => Promise<void>;
+  onListAccounts: () => Promise<readonly GitHubAccountSummary[]>;
+  onListRepositories: (
+    account: GitHubAccountSelection,
+  ) => Promise<readonly GitHubRepositorySummary[]>;
 }
 
 type RepositoryEntryMode = "search" | "paste";
+
+function githubAccountKey(account: Pick<GitHubAccountSummary, "host" | "login">): string {
+  return `${account.host}/${account.login}`;
+}
 
 export function filterGitHubRepositories(
   repositories: readonly GitHubRepositorySummary[],
@@ -45,14 +57,19 @@ export function GitHubProjectDialog({
   open,
   onOpenChange,
   onClone,
+  onListAccounts,
   onListRepositories,
 }: GitHubProjectDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [entryMode, setEntryMode] = useState<RepositoryEntryMode>("search");
   const [repository, setRepository] = useState("");
   const [repositoryQuery, setRepositoryQuery] = useState("");
+  const [accounts, setAccounts] = useState<readonly GitHubAccountSummary[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<GitHubAccountSummary | null>(null);
   const [repositories, setRepositories] = useState<readonly GitHubRepositorySummary[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
   const [isLoadingRepositories, setIsLoadingRepositories] = useState(false);
+  const [accountListError, setAccountListError] = useState<string | null>(null);
   const [repositoryListError, setRepositoryListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCloning, setIsCloning] = useState(false);
@@ -63,13 +80,46 @@ export function GitHubProjectDialog({
     setEntryMode("search");
     setRepository("");
     setRepositoryQuery("");
+    setAccounts([]);
+    setSelectedAccount(null);
     setRepositories([]);
+    setAccountListError(null);
     setRepositoryListError(null);
     setError(null);
     setIsCloning(false);
-    setIsLoadingRepositories(true);
+    setIsLoadingAccounts(true);
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
-    void onListRepositories()
+    void onListAccounts()
+      .then((nextAccounts) => {
+        if (cancelled) return;
+        setAccounts(nextAccounts);
+        setSelectedAccount(
+          nextAccounts.find((account) => account.active) ?? nextAccounts[0] ?? null,
+        );
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setAccountListError(
+          cause instanceof Error ? cause.message : "GitHub accounts could not be loaded.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingAccounts(false);
+      });
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+    };
+  }, [onListAccounts, open]);
+
+  useEffect(() => {
+    if (!open || !selectedAccount) return;
+    let cancelled = false;
+    setRepository("");
+    setRepositories([]);
+    setRepositoryListError(null);
+    setIsLoadingRepositories(true);
+    void onListRepositories({ host: selectedAccount.host, login: selectedAccount.login })
       .then((nextRepositories) => {
         if (!cancelled) setRepositories(nextRepositories);
       })
@@ -84,9 +134,8 @@ export function GitHubProjectDialog({
       });
     return () => {
       cancelled = true;
-      window.cancelAnimationFrame(frame);
     };
-  }, [onListRepositories, open]);
+  }, [onListRepositories, open, selectedAccount]);
 
   useEffect(() => {
     if (!open) return;
@@ -101,11 +150,14 @@ export function GitHubProjectDialog({
 
   const cloneRepository = async (candidate = repository) => {
     const trimmedRepository = candidate.trim();
-    if (!trimmedRepository || isCloning) return;
+    if (!trimmedRepository || !selectedAccount || isCloning) return;
     setIsCloning(true);
     setError(null);
     try {
-      await onClone(trimmedRepository);
+      await onClone(trimmedRepository, {
+        host: selectedAccount.host,
+        login: selectedAccount.login,
+      });
       onOpenChange(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The repository could not be cloned.");
@@ -128,8 +180,8 @@ export function GitHubProjectDialog({
             Add GitHub project
           </DialogTitle>
           <DialogDescription>
-            Search repositories available to your GitHub account, or paste a repository URL. Synara
-            keeps the managed checkout out of your way.
+            Choose a signed-in GitHub account, then search its repositories or paste a repository
+            URL. Synara keeps the managed checkout out of your way.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="grid gap-3.5">
@@ -162,6 +214,51 @@ export function GitHubProjectDialog({
                 {label}
               </button>
             ))}
+          </div>
+
+          <div className="grid gap-1.5">
+            <span className="text-xs font-medium text-foreground">GitHub account</span>
+            <Select
+              value={selectedAccount ? githubAccountKey(selectedAccount) : ""}
+              disabled={isLoadingAccounts || accounts.length === 0 || isCloning}
+              onValueChange={(value) => {
+                if (typeof value !== "string") return;
+                const nextAccount = accounts.find((account) => githubAccountKey(account) === value);
+                setSelectedAccount(nextAccount ?? null);
+                setRepositoryQuery("");
+                setError(null);
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label="GitHub account">
+                <SelectValue
+                  placeholder={
+                    isLoadingAccounts ? "Loading GitHub accounts…" : "No signed-in accounts"
+                  }
+                />
+              </SelectTrigger>
+              <SelectPopup alignItemWithTrigger={false} className="min-w-[var(--anchor-width)] p-1">
+                {accounts.map((account) => (
+                  <SelectItem key={githubAccountKey(account)} value={githubAccountKey(account)}>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{account.login}</span>
+                      {account.host !== "github.com" ? (
+                        <span className="truncate text-muted-foreground">{account.host}</span>
+                      ) : null}
+                      {account.active ? (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          CLI active
+                        </span>
+                      ) : null}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+            {accountListError ? (
+              <span role="alert" className="text-xs leading-relaxed text-red-400">
+                {accountListError}
+              </span>
+            ) : null}
           </div>
 
           {entryMode === "search" ? (
@@ -204,7 +301,7 @@ export function GitHubProjectDialog({
                 ) : filteredRepositories.length === 0 ? (
                   <div className="px-3 py-10 text-center text-xs text-muted-foreground">
                     {repositories.length === 0
-                      ? "No repositories are available to this GitHub account."
+                      ? `No repositories are available to ${selectedAccount?.login ?? "this GitHub account"}.`
                       : "No repositories match your search."}
                   </div>
                 ) : (
@@ -290,7 +387,10 @@ export function GitHubProjectDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isCloning}>
             Cancel
           </Button>
-          <Button onClick={() => void cloneRepository()} disabled={!repository.trim() || isCloning}>
+          <Button
+            onClick={() => void cloneRepository()}
+            disabled={!repository.trim() || !selectedAccount || isCloning}
+          >
             {isCloning ? <Spinner className="size-3.5" /> : null}
             {isCloning ? "Cloning repository…" : "Clone repository"}
           </Button>

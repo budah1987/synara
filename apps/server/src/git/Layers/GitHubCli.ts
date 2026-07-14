@@ -2,6 +2,8 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubAccountSelection,
+  type GitHubAccountSummary,
   type GitHubRepositorySummary,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
@@ -40,6 +42,15 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
   "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+
+function environmentWithoutGitHubTokenOverrides(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.GH_TOKEN;
+  delete env.GITHUB_TOKEN;
+  delete env.GH_ENTERPRISE_TOKEN;
+  delete env.GITHUB_ENTERPRISE_TOKEN;
+  return env;
+}
 
 function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown): GitHubCliError {
   if (error instanceof Error) {
@@ -171,58 +182,32 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   sshUrl: TrimmedNonEmptyString,
 });
 
+const RawGitHubAuthAccountSchema = Schema.Struct({
+  state: Schema.String,
+  active: Schema.Boolean,
+  host: Schema.String,
+  login: Schema.String,
+});
+
+const RawGitHubAuthStatusSchema = Schema.Struct({
+  hosts: Schema.Record(Schema.String, Schema.Array(RawGitHubAuthAccountSchema)),
+});
+
 const RawGraphQlErrorSchema = Schema.Struct({
   message: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawGitHubRepositorySummarySchema = Schema.Struct({
-  nameWithOwner: TrimmedNonEmptyString,
-  url: TrimmedNonEmptyString,
+  full_name: TrimmedNonEmptyString,
+  html_url: TrimmedNonEmptyString,
   description: Schema.optional(Schema.NullOr(Schema.String)),
-  defaultBranchRef: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        name: TrimmedNonEmptyString,
-      }),
-    ),
-  ),
-  pushedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  isPrivate: Schema.optional(Schema.NullOr(Schema.Boolean)),
-  isArchived: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  default_branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pushed_at: Schema.optional(Schema.NullOr(Schema.String)),
+  private: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  archived: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 
-const RawGitHubRepositoryListResponseSchema = Schema.Struct({
-  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
-  data: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        viewer: Schema.optional(
-          Schema.NullOr(
-            Schema.Struct({
-              repositories: Schema.optional(
-                Schema.NullOr(
-                  Schema.Struct({
-                    nodes: Schema.optional(
-                      Schema.NullOr(Schema.Array(Schema.NullOr(RawGitHubRepositorySummarySchema))),
-                    ),
-                    pageInfo: Schema.optional(
-                      Schema.NullOr(
-                        Schema.Struct({
-                          hasNextPage: Schema.optional(Schema.NullOr(Schema.Boolean)),
-                          endCursor: Schema.optional(Schema.NullOr(Schema.String)),
-                        }),
-                      ),
-                    ),
-                  }),
-                ),
-              ),
-            }),
-          ),
-        ),
-      }),
-    ),
-  ),
-});
+const RawGitHubRepositoryPagesSchema = Schema.Array(Schema.Array(RawGitHubRepositorySummarySchema));
 
 // `gh pr view --json statusCheckRollup` mixes CheckRun and StatusContext nodes; both are
 // covered by one permissive shape and told apart by which fields are populated.
@@ -337,31 +322,8 @@ const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
-const REPOSITORY_PAGE_SIZE = 100;
-const REPOSITORY_PAGE_LIMIT = 5;
-const LIST_REPOSITORIES_QUERY = `
-  query SynaraRepositories($first: Int!, $after: String) {
-    viewer {
-      repositories(
-        first: $first
-        after: $after
-        affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
-        orderBy: { field: PUSHED_AT, direction: DESC }
-      ) {
-        nodes {
-          nameWithOwner
-          url
-          description
-          defaultBranchRef { name }
-          pushedAt
-          isPrivate
-          isArchived
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-`;
+const LIST_REPOSITORIES_ENDPOINT =
+  "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=pushed&direction=desc";
 
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
@@ -764,13 +726,13 @@ function normalizeRepositorySummary(
   raw: Schema.Schema.Type<typeof RawGitHubRepositorySummarySchema>,
 ): GitHubRepositorySummary {
   return {
-    nameWithOwner: raw.nameWithOwner,
-    url: raw.url,
+    nameWithOwner: raw.full_name,
+    url: raw.html_url,
     description: raw.description?.trim() || null,
-    defaultBranch: raw.defaultBranchRef?.name ?? null,
-    pushedAt: raw.pushedAt?.trim() || null,
-    isPrivate: raw.isPrivate === true,
-    isArchived: raw.isArchived === true,
+    defaultBranch: raw.default_branch ?? null,
+    pushedAt: raw.pushed_at?.trim() || null,
+    isPrivate: raw.private === true,
+    isArchived: raw.archived === true,
   };
 }
 
@@ -802,6 +764,7 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "listPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
+    | "listAccounts"
     | "listRepositories"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
@@ -860,21 +823,58 @@ export function decodePullRequestListJson(
 }
 
 const makeGitHubCli = Effect.sync(() => {
-  const execute: GitHubCliShape["execute"] = (input) =>
+  const resolveAccountEnvironment = (input: {
+    readonly cwd: string;
+    readonly account: GitHubAccountSelection;
+  }) =>
     Effect.tryPromise({
-      try: (signal) =>
-        runProcess("gh", input.args, {
+      try: async () => {
+        const baseEnvironment = environmentWithoutGitHubTokenOverrides();
+        const tokenResult = await runProcess(
+          "gh",
+          ["auth", "token", "--hostname", input.account.host, "--user", input.account.login],
+          {
+            cwd: input.cwd,
+            timeoutMs: DEFAULT_TIMEOUT_MS,
+            env: baseEnvironment,
+          },
+        );
+        const token = tokenResult.stdout.trim();
+        if (!token) {
+          throw new Error(
+            `GitHub CLI did not return credentials for ${input.account.login} on ${input.account.host}.`,
+          );
+        }
+        return {
+          ...baseEnvironment,
+          GH_HOST: input.account.host,
+          GH_TOKEN: token,
+          GH_ENTERPRISE_TOKEN: token,
+        } satisfies NodeJS.ProcessEnv;
+      },
+      catch: (error) => normalizeGitHubCliError("execute", error),
+    });
+
+  const execute: GitHubCliShape["execute"] = (input) =>
+    Effect.gen(function* () {
+      const env = input.account
+        ? yield* resolveAccountEnvironment({ cwd: input.cwd, account: input.account })
+        : { ...process.env, GH_HOST: GITHUB_HOST };
+      return yield* Effect.tryPromise({
+        try: (signal) =>
+          runProcess("gh", input.args, {
           cwd: input.cwd,
           timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
           signal,
           // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
           // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env: { ...process.env, GH_HOST: GITHUB_HOST },
+          env,
           ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
           ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
           ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
         }),
-      catch: (error) => normalizeGitHubCliError("execute", error),
+        catch: (error) => normalizeGitHubCliError("execute", error),
+      });
     });
 
   const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
@@ -1348,6 +1348,45 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.asVoid,
       ),
+    listAccounts: (input) =>
+      Effect.tryPromise({
+        try: () =>
+          runProcess("gh", ["auth", "status", "--json", "hosts"], {
+            cwd: input.cwd,
+            timeoutMs: DEFAULT_TIMEOUT_MS,
+            env: environmentWithoutGitHubTokenOverrides(),
+          }),
+        catch: (error) => normalizeGitHubCliError("execute", error),
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubAuthStatusSchema,
+            "listAccounts",
+            "GitHub CLI returned invalid account status JSON.",
+          ),
+        ),
+        Effect.map((decoded) => {
+          const accounts: GitHubAccountSummary[] = [];
+          for (const [host, hostAccounts] of Object.entries(decoded.hosts)) {
+            for (const account of hostAccounts) {
+              if (account.state !== "success") continue;
+              accounts.push({
+                host: account.host.trim() || host,
+                login: account.login,
+                active: account.active,
+              });
+            }
+          }
+          return accounts.sort(
+            (left, right) =>
+              Number(right.active) - Number(left.active) ||
+              left.host.localeCompare(right.host) ||
+              left.login.localeCompare(right.login),
+          );
+        }),
+      ),
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, {
         state: "open",
@@ -1484,6 +1523,7 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               "nameWithOwner,url,sshUrl",
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.map((result) => result.stdout.trim()),
@@ -1498,52 +1538,22 @@ const makeGitHubCli = Effect.sync(() => {
         Effect.map(normalizeRepositoryCloneUrls),
       ),
     listRepositories: (input) =>
-      Effect.gen(function* () {
-        const repositories: GitHubRepositorySummary[] = [];
-        let after: string | null = null;
-        let fetchedPages = 0;
-
-        do {
-          fetchedPages += 1;
-          const raw = yield* execute({
-            cwd: input.cwd,
-            args: [
-              "api",
-              "graphql",
-              "-f",
-              `query=${LIST_REPOSITORIES_QUERY}`,
-              "-F",
-              `first=${REPOSITORY_PAGE_SIZE}`,
-              ...(after ? ["-F", `after=${after}`] : []),
-            ],
-          }).pipe(Effect.map((result) => result.stdout.trim()));
-          const decoded = yield* decodeGitHubJson(
+      execute({
+        cwd: input.cwd,
+        ...(input.account ? { account: input.account } : {}),
+        args: ["api", "--paginate", "--slurp", "-X", "GET", LIST_REPOSITORIES_ENDPOINT],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
             raw,
-            RawGitHubRepositoryListResponseSchema,
+            RawGitHubRepositoryPagesSchema,
             "listRepositories",
             "GitHub CLI returned invalid repository list JSON.",
-          );
-          const errorDetail = getGraphQlErrorDetail(decoded);
-          if (errorDetail) {
-            return yield* Effect.fail(
-              new GitHubCliError({ operation: "listRepositories", detail: errorDetail }),
-            );
-          }
-
-          const connection = decoded.data?.viewer?.repositories;
-          for (const repository of connection?.nodes ?? []) {
-            if (repository) repositories.push(normalizeRepositorySummary(repository));
-          }
-          const pageInfo = connection?.pageInfo;
-          const canFetchNextPage =
-            pageInfo?.hasNextPage === true &&
-            Boolean(pageInfo.endCursor?.trim()) &&
-            fetchedPages < REPOSITORY_PAGE_LIMIT;
-          after = canFetchNextPage ? (pageInfo?.endCursor?.trim() ?? null) : null;
-        } while (after !== null);
-
-        return repositories;
-      }),
+          ),
+        ),
+        Effect.map((pages) => pages.flatMap((page) => page.map(normalizeRepositorySummary))),
+      ),
     createPullRequest: (input) =>
       execute({
         cwd: input.cwd,

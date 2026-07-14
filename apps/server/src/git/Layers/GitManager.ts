@@ -2023,6 +2023,34 @@ The local stash entry was kept for recovery.`,
         );
       }
 
+      if (input.preserveWorktree === true) {
+        const worktreeStatus = yield* gitCore.statusDetails(input.worktreePath);
+        if (!worktreeStatus.isRepo) {
+          return yield* gitManagerError(
+            "handoffThread",
+            "The conversation worktree is no longer available. Refresh the project and choose another workspace.",
+          );
+        }
+        const worktreeHeadRef = yield* readHeadRef(input.worktreePath);
+        return {
+          targetMode: "local",
+          branch: currentLocalStatus.branch ?? input.preferredLocalBranch,
+          worktreePath: null,
+          associatedWorktreePath: input.associatedWorktreePath ?? input.worktreePath,
+          associatedWorktreeBranch:
+            input.associatedWorktreeBranch ?? worktreeStatus.branch ?? input.currentBranch,
+          associatedWorktreeRef:
+            input.associatedWorktreeRef ??
+            worktreeHeadRef ??
+            worktreeStatus.branch ??
+            input.currentBranch,
+          changesTransferred: false,
+          conflictsDetected: false,
+          message:
+            "This conversation now runs in the local checkout. Its worktree is unchanged and ready when you return.",
+        };
+      }
+
       const worktreeHeadRef = yield* readHeadRef(input.worktreePath);
       const targetLocalBranch =
         input.currentBranch ?? input.associatedWorktreeBranch ?? input.preferredLocalBranch ?? null;
@@ -2207,6 +2235,32 @@ The local stash entry was kept for recovery.`,
         "handoffThread",
         "Select a base branch before handing off this thread to a worktree.",
       );
+    }
+
+    if (
+      input.preserveWorktree === true &&
+      worktreeIntent.kind === "reuse-associated" &&
+      targetAssociatedWorktreePath
+    ) {
+      const existingWorktreeStatus = yield* gitCore.statusDetails(targetAssociatedWorktreePath);
+      if (existingWorktreeStatus.isRepo) {
+        const existingWorktreeRef = yield* readHeadRef(targetAssociatedWorktreePath);
+        return {
+          targetMode: "worktree",
+          branch: existingWorktreeStatus.branch ?? targetAssociatedWorktreeBranch,
+          worktreePath: targetAssociatedWorktreePath,
+          associatedWorktreePath: targetAssociatedWorktreePath,
+          associatedWorktreeBranch: existingWorktreeStatus.branch ?? targetAssociatedWorktreeBranch,
+          associatedWorktreeRef:
+            existingWorktreeRef ??
+            targetAssociatedWorktreeRef ??
+            existingWorktreeStatus.branch ??
+            targetAssociatedWorktreeBranch,
+          changesTransferred: false,
+          conflictsDetected: false,
+          message: "This conversation is running in its existing worktree again.",
+        };
+      }
     }
 
     const sourceStash = yield* stashWorkingTree(

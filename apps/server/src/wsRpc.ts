@@ -989,6 +989,7 @@ export const makeWsRpcLayer = () =>
               const repository = yield* gitHubCli.getRepositoryCloneUrls({
                 cwd: config.homeDir,
                 repository: input.repository,
+                ...(input.account ? { account: input.account } : {}),
               });
               const segments = repository.nameWithOwner.split("/");
               if (
@@ -1005,6 +1006,7 @@ export const makeWsRpcLayer = () =>
                   cwd: config.homeDir,
                   args: ["repo", "clone", repository.nameWithOwner, destination],
                   timeoutMs: 120_000,
+                  ...(input.account ? { account: input.account } : {}),
                 });
               }
               const branches = yield* git.listBranches({ cwd: destination });
@@ -1047,10 +1049,20 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to clone GitHub repository",
           ),
-        [WS_METHODS.gitListGitHubRepositories]: () =>
+        [WS_METHODS.gitListGitHubAccounts]: () =>
           rpcEffect(
             gitHubCli
-              .listRepositories({ cwd: config.homeDir })
+              .listAccounts({ cwd: config.homeDir })
+              .pipe(Effect.map((accounts) => ({ accounts: [...accounts] }))),
+            "Failed to list GitHub accounts",
+          ),
+        [WS_METHODS.gitListGitHubRepositories]: (input) =>
+          rpcEffect(
+            gitHubCli
+              .listRepositories({
+                cwd: config.homeDir,
+                ...(input.account ? { account: input.account } : {}),
+              })
               .pipe(Effect.map((repositories) => ({ repositories: [...repositories] }))),
             "Failed to list GitHub repositories",
           ),

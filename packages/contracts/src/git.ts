@@ -222,6 +222,7 @@ export const GitHandoffThreadInput = Schema.Struct({
   preferredLocalBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
   preferredWorktreeBaseBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
   preferredNewWorktreeName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  preserveWorktree: Schema.optional(Schema.Boolean),
 });
 export type GitHandoffThreadInput = typeof GitHandoffThreadInput.Type;
 
@@ -246,12 +247,24 @@ export const GitRenameBranchInput = Schema.Struct({
 });
 export type GitRenameBranchInput = typeof GitRenameBranchInput.Type;
 
+export const GitHubAccountSelection = Schema.Struct({
+  host: TrimmedNonEmptyStringSchema,
+  login: TrimmedNonEmptyStringSchema,
+});
+export type GitHubAccountSelection = typeof GitHubAccountSelection.Type;
+
 export const GitCloneRepositoryInput = Schema.Struct({
   repository: TrimmedNonEmptyStringSchema,
+  account: Schema.optional(GitHubAccountSelection),
 });
 export type GitCloneRepositoryInput = typeof GitCloneRepositoryInput.Type;
 
-export const GitHubListRepositoriesInput = Schema.Struct({});
+export const GitHubListAccountsInput = Schema.Struct({});
+export type GitHubListAccountsInput = typeof GitHubListAccountsInput.Type;
+
+export const GitHubListRepositoriesInput = Schema.Struct({
+  account: Schema.optional(GitHubAccountSelection),
+});
 export type GitHubListRepositoriesInput = typeof GitHubListRepositoriesInput.Type;
 
 export const GitCheckoutInput = Schema.Struct({
@@ -436,6 +449,18 @@ export const GitHubRepositorySummary = Schema.Struct({
   isArchived: Schema.Boolean,
 });
 export type GitHubRepositorySummary = typeof GitHubRepositorySummary.Type;
+
+export const GitHubAccountSummary = Schema.Struct({
+  host: TrimmedNonEmptyStringSchema,
+  login: TrimmedNonEmptyStringSchema,
+  active: Schema.Boolean,
+});
+export type GitHubAccountSummary = typeof GitHubAccountSummary.Type;
+
+export const GitHubListAccountsResult = Schema.Struct({
+  accounts: Schema.Array(GitHubAccountSummary),
+});
+export type GitHubListAccountsResult = typeof GitHubListAccountsResult.Type;
 
 export const GitHubListRepositoriesResult = Schema.Struct({
   repositories: Schema.Array(GitHubRepositorySummary),

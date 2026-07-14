@@ -353,6 +353,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         ghCalls.push(`pr comment ${input.number} --repo ${input.repository}`);
         return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
       },
+      listAccounts: () => Effect.succeed([]),
       listOpenPullRequests: (input) =>
         listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
       listPullRequests: (input) =>
@@ -392,6 +393,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         execute({
           cwd: input.cwd,
           args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
+          ...(input.account ? { account: input.account } : {}),
         }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
       listRepositories: () => Effect.succeed([]),
       checkoutPullRequest: (input) =>

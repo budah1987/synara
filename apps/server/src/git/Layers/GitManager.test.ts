@@ -2571,6 +2571,71 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       }),
   );
 
+  it.effect(
+    "switches between local and an existing worktree without removing either checkout",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+
+        const { manager } = yield* makeManager();
+        const created = yield* handoffThread(manager, {
+          cwd: repoDir,
+          targetMode: "worktree",
+          currentBranch: "main",
+          worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: "worktree/reversible-context",
+        });
+        const worktreePath = created.worktreePath as string;
+        const worktreeFile = path.join(worktreePath, "worktree-only.txt");
+        fs.writeFileSync(worktreeFile, "stays in the worktree\n");
+
+        const local = yield* manager.handoffThread({
+          cwd: repoDir,
+          targetMode: "local",
+          currentBranch: created.branch,
+          worktreePath,
+          associatedWorktreePath: created.associatedWorktreePath,
+          associatedWorktreeBranch: created.associatedWorktreeBranch,
+          associatedWorktreeRef: created.associatedWorktreeRef,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: null,
+          preserveWorktree: true,
+        });
+
+        expect(local.targetMode).toBe("local");
+        expect(local.branch).toBe("main");
+        expect(local.worktreePath).toBeNull();
+        expect(local.associatedWorktreePath).toBe(worktreePath);
+        expect(fs.readFileSync(worktreeFile, "utf8")).toBe("stays in the worktree\n");
+
+        const returned = yield* manager.handoffThread({
+          cwd: repoDir,
+          targetMode: "worktree",
+          currentBranch: local.branch,
+          worktreePath: null,
+          associatedWorktreePath: local.associatedWorktreePath,
+          associatedWorktreeBranch: local.associatedWorktreeBranch,
+          associatedWorktreeRef: local.associatedWorktreeRef,
+          preferredLocalBranch: "main",
+          preferredWorktreeBaseBranch: "main",
+          preferredNewWorktreeName: null,
+          preserveWorktree: true,
+        });
+
+        expect(returned.targetMode).toBe("worktree");
+        expect(returned.worktreePath).toBe(worktreePath);
+        expect(returned.branch).toBe("worktree/reversible-context");
+        expect(fs.readFileSync(worktreeFile, "utf8")).toBe("stays in the worktree\n");
+      }),
+  );
+
   it.effect("emits ordered progress events for commit hooks", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");

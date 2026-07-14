@@ -19,6 +19,59 @@ afterEach(() => {
 });
 
 layer("GitHubCliLive", (it) => {
+  it.effect("lists healthy GitHub CLI accounts without inherited token overrides", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          hosts: {
+            "github.com": [
+              {
+                state: "success",
+                active: true,
+                host: "github.com",
+                login: "octocat",
+              },
+              {
+                state: "success",
+                active: false,
+                host: "github.com",
+                login: "hubot",
+              },
+              {
+                state: "error",
+                active: false,
+                host: "github.com",
+                login: "expired",
+              },
+            ],
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listAccounts({ cwd: "/repo" });
+      });
+
+      assert.deepStrictEqual(result, [
+        { host: "github.com", login: "octocat", active: true },
+        { host: "github.com", login: "hubot", active: false },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["auth", "status", "--json", "hosts"],
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.not.objectContaining({ GH_TOKEN: expect.any(String) }),
+        }),
+      );
+    }),
+  );
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
@@ -195,61 +248,38 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
-  it.effect("lists repositories available to the authenticated account", () =>
+  it.effect("lists every repository page available to the authenticated account", () =>
     Effect.gen(function* () {
-      mockedRunProcess
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            data: {
-              viewer: {
-                repositories: {
-                  nodes: [
-                    {
-                      nameWithOwner: "octocat/private-tools",
-                      url: "https://github.com/octocat/private-tools",
-                      description: "Developer tooling",
-                      defaultBranchRef: { name: "main" },
-                      pushedAt: "2026-07-14T10:00:00Z",
-                      isPrivate: true,
-                      isArchived: false,
-                    },
-                  ],
-                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
-                },
-              },
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          [
+            {
+              full_name: "octocat/private-tools",
+              html_url: "https://github.com/octocat/private-tools",
+              description: "Developer tooling",
+              default_branch: "main",
+              pushed_at: "2026-07-14T10:00:00Z",
+              private: true,
+              archived: false,
             },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        })
-        .mockResolvedValueOnce({
-          stdout: JSON.stringify({
-            data: {
-              viewer: {
-                repositories: {
-                  nodes: [
-                    {
-                      nameWithOwner: "example-org/shared-app",
-                      url: "https://github.com/example-org/shared-app",
-                      description: null,
-                      defaultBranchRef: null,
-                      pushedAt: null,
-                      isPrivate: false,
-                      isArchived: true,
-                    },
-                  ],
-                  pageInfo: { hasNextPage: false, endCursor: null },
-                },
-              },
+          ],
+          [
+            {
+              full_name: "example-org/shared-app",
+              html_url: "https://github.com/example-org/shared-app",
+              description: null,
+              default_branch: null,
+              pushed_at: null,
+              private: false,
+              archived: true,
             },
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
+          ],
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
@@ -276,9 +306,61 @@ layer("GitHubCliLive", (it) => {
           isArchived: true,
         },
       ]);
-      expect(mockedRunProcess).toHaveBeenCalledTimes(2);
-      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
-        expect.arrayContaining(["after=cursor-1"]),
+      expect(mockedRunProcess).toHaveBeenCalledOnce();
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining([
+          "api",
+          "--paginate",
+          "--slurp",
+          "user/repos?affiliation=owner,collaborator,organization_member&per_page=100&sort=pushed&direction=desc",
+        ]),
+      );
+    }),
+  );
+
+  it.effect("scopes repository discovery to the selected GitHub account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify([[]]),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositories({
+          cwd: "/repo",
+          account: { host: "github.com", login: "hubot" },
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "auth",
+        "token",
+        "--hostname",
+        "github.com",
+        "--user",
+        "hubot",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.objectContaining({
+            GH_HOST: "github.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
       );
     }),
   );

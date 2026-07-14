@@ -8,6 +8,8 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
+  GitHubAccountSelection,
+  GitHubAccountSummary,
   GitHubRepositorySummary,
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -135,6 +137,7 @@ export interface GitHubCliShape {
     readonly outputMode?: "error" | "truncate";
     /** Piped to the child's stdin — for payloads that must never appear in argv. */
     readonly stdin?: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
   readonly getViewerLogin: (input: {
@@ -207,6 +210,11 @@ export interface GitHubCliShape {
     readonly body: string;
   }) => Effect.Effect<void, GitHubCliError>;
 
+  /** List every healthy account stored by GitHub CLI without changing the active account. */
+  readonly listAccounts: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<GitHubAccountSummary>, GitHubCliError>;
+
   /**
    * List open pull requests for a head branch.
    */
@@ -268,6 +276,7 @@ export interface GitHubCliShape {
   readonly getRepositoryCloneUrls: (input: {
     readonly cwd: string;
     readonly repository: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
 
   /**
@@ -276,6 +285,7 @@ export interface GitHubCliShape {
    */
   readonly listRepositories: (input: {
     readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubRepositorySummary>, GitHubCliError>;
 
   /**

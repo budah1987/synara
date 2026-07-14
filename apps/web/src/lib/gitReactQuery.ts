@@ -503,6 +503,7 @@ export function gitHandoffThreadMutationOptions(input: {
       preferredLocalBranch: string | null;
       preferredWorktreeBaseBranch: string | null;
       preferredNewWorktreeName: string | null;
+      preserveWorktree?: boolean;
     },
     Awaited<ReturnType<NativeApi["git"]["handoffThread"]>>
   >({

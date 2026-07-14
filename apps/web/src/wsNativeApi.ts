@@ -571,6 +571,8 @@ export function createWsNativeApi(): NativeApi {
       renameBranch: (input) => transport.request(WS_METHODS.gitRenameBranch, input),
       cloneRepository: (input) =>
         transport.request(WS_METHODS.gitCloneRepository, input, { timeoutMs: null }),
+      listGitHubAccounts: (input) =>
+        transport.request(WS_METHODS.gitListGitHubAccounts, input, { timeoutMs: null }),
       listGitHubRepositories: (input) =>
         transport.request(WS_METHODS.gitListGitHubRepositories, input, { timeoutMs: null }),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
