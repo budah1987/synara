@@ -134,6 +134,7 @@ import {
   isThreadRunningTurn,
 } from "../session-logic";
 import {
+  gitGithubRepositoryQueryOptions,
   gitRemoveWorktreeMutationOptions,
   gitResolvePullRequestQueryOptions,
   gitStatusQueryOptions,
@@ -298,6 +299,7 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import {
+  buildGitHubBranchUrl,
   describeAddProjectError,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
@@ -1988,6 +1990,59 @@ export default function Sidebar() {
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
+  );
+  const workspaceRepositoryTargets = useMemo(() => {
+    if (workspaceProtocolVersion !== 2) {
+      return [];
+    }
+    const workspaceProjectIds = new Set(
+      worktreeWorkspaces
+        .filter((workspace) => workspace.deletedAt === null)
+        .map((workspace) => workspace.projectId),
+    );
+    return projects
+      .filter((project) => workspaceProjectIds.has(project.id))
+      .map((project) => ({ projectId: project.id, cwd: project.cwd }));
+  }, [projects, workspaceProtocolVersion, worktreeWorkspaces]);
+  const workspaceRepositoryQueries = useQueries({
+    queries: workspaceRepositoryTargets.map((target) =>
+      gitGithubRepositoryQueryOptions(target.cwd),
+    ),
+  });
+  const githubRepositoryUrlByProjectId = useMemo(() => {
+    const urls = new Map<ProjectId, string>();
+    for (let index = 0; index < workspaceRepositoryTargets.length; index += 1) {
+      const target = workspaceRepositoryTargets[index];
+      const repositoryUrl = workspaceRepositoryQueries[index]?.data?.repository?.url;
+      if (target && repositoryUrl) {
+        urls.set(target.projectId, repositoryUrl);
+      }
+    }
+    return urls;
+  }, [workspaceRepositoryQueries, workspaceRepositoryTargets]);
+  const openWorkspaceBranchLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, branchUrl: string) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Link opening is unavailable.",
+        });
+        return;
+      }
+
+      void api.shell.openExternal(branchUrl).catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to open branch link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      });
+    },
+    [],
   );
   const projectByIdRef = useRef(projectById);
   const projectRunCommandByProjectIdRef = useRef<
@@ -6213,6 +6268,10 @@ export default function Sidebar() {
                       const isActiveWorkspace = workspaceThreads.some(
                         (thread) => thread.id === visualActiveSidebarThreadId,
                       );
+                      const branchUrl = buildGitHubBranchUrl(
+                        githubRepositoryUrlByProjectId.get(workspace.projectId),
+                        workspace.branch,
+                      );
                       return (
                         <SidebarMenuSubItem key={workspace.id} className="w-full">
                           <div
@@ -6221,8 +6280,9 @@ export default function Sidebar() {
                               isActiveWorkspace && "bg-[var(--sidebar-accent)]",
                             )}
                           >
-                            <Tooltip>
-                              <TooltipTrigger
+                            <PreviewCard>
+                              <PreviewCardTrigger
+                                {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
                                 render={
                                   <button
                                     type="button"
@@ -6257,7 +6317,10 @@ export default function Sidebar() {
                                   </button>
                                 }
                               />
-                              <TooltipPopup side="right" sideOffset={8} className="max-w-80">
+                              <PreviewCardPopup
+                                {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
+                                className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "p-2")}
+                              >
                                 <div className="grid gap-2 py-0.5 text-xs">
                                   <div className="font-medium text-foreground">
                                     {workspace.title}
@@ -6265,7 +6328,23 @@ export default function Sidebar() {
                                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-muted-foreground">
                                     <dt>Branch</dt>
                                     <dd className="truncate text-foreground/85">
-                                      {workspace.branch ?? "Waiting for worktree"}
+                                      {branchUrl && workspace.branch ? (
+                                        <a
+                                          href={branchUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="inline-flex max-w-full items-center gap-1 rounded-sm font-medium text-foreground underline decoration-foreground/30 underline-offset-2 transition-colors hover:decoration-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                          aria-label={`Open ${workspace.branch} on GitHub`}
+                                          onClick={(event) =>
+                                            openWorkspaceBranchLink(event, branchUrl)
+                                          }
+                                        >
+                                          <span className="truncate">{workspace.branch}</span>
+                                          <ExternalLinkIcon className="size-3 shrink-0 opacity-65" />
+                                        </a>
+                                      ) : (
+                                        (workspace.branch ?? "Waiting for worktree")
+                                      )}
                                     </dd>
                                     <dt>Path</dt>
                                     <dd className="truncate text-foreground/85">
@@ -6287,8 +6366,8 @@ export default function Sidebar() {
                                     {pluralize(workspaceThreads.length, "conversation")}
                                   </p>
                                 </div>
-                              </TooltipPopup>
-                            </Tooltip>
+                              </PreviewCardPopup>
+                            </PreviewCard>
                             <div className="absolute right-1 flex items-center gap-0.5 rounded-md bg-[var(--sidebar-accent)] pl-1 opacity-0 transition-opacity duration-150 group-hover/workspace-row:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
                               <button
                                 type="button"

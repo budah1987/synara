@@ -98,6 +98,35 @@ export function pullRequestRepositoryConfigFingerprint(
   );
 }
 
+export function buildGitHubBranchUrl(
+  repositoryUrl: string | null | undefined,
+  branch: string | null | undefined,
+): string | null {
+  const normalizedRepositoryUrl = repositoryUrl?.trim();
+  const normalizedBranch = branch?.trim();
+  if (!normalizedRepositoryUrl || !normalizedBranch) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalizedRepositoryUrl);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") {
+      return null;
+    }
+    const repositoryPath = url.pathname.replace(/\/+$/, "").replace(/\.git$/i, "");
+    if (repositoryPath.split("/").filter(Boolean).length !== 2) {
+      return null;
+    }
+    const branchPath = normalizedBranch.split("/").map(encodeURIComponent).join("/");
+    url.pathname = `${repositoryPath}/tree/${branchPath}`;
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** The optimistic segment follows a destination click and clears when the user returns. */
 export function resolvePendingSidebarViewSelection(
   activeView: SidebarView,

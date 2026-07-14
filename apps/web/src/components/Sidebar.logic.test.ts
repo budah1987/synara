@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildGitHubBranchUrl,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -119,6 +120,19 @@ describe("pullRequestRepositoryConfigFingerprint", () => {
     expect(
       pullRequestRepositoryConfigFingerprint([{ ...first, name: "Renamed" }, second]),
     ).not.toBe(baseline);
+  });
+});
+
+describe("buildGitHubBranchUrl", () => {
+  it("builds a GitHub tree link while preserving namespaced branches", () => {
+    expect(
+      buildGitHubBranchUrl("https://github.com/amirghst/ghost-vault", "synara/test branch"),
+    ).toBe("https://github.com/amirghst/ghost-vault/tree/synara/test%20branch");
+  });
+
+  it("rejects missing branches and non-GitHub repositories", () => {
+    expect(buildGitHubBranchUrl("https://github.com/amirghst/ghost-vault", null)).toBeNull();
+    expect(buildGitHubBranchUrl("https://gitlab.com/amirghst/ghost-vault", "main")).toBeNull();
   });
 });
 
