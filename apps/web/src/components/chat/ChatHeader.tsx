@@ -548,58 +548,68 @@ function EditorRailTabs(props: {
       }
     })();
   };
+  const newItemMenu = (
+    <Menu modal={false}>
+      <MenuTrigger
+        render={
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            label={props.workspaceId ? "New workspace item" : "New editor rail item"}
+            title="New"
+            className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <PlusIcon className="size-3.5" />
+          </IconButton>
+        }
+      />
+      <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-44 min-w-44">
+        <MenuItem onClick={props.onNewChat}>
+          <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>New chat</span>
+        </MenuItem>
+        <MenuItem onClick={newTerminalTab}>
+          <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          <span>New terminal</span>
+        </MenuItem>
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-      <div className="flex shrink-0 items-center gap-0.5">
-        <Menu modal={false}>
-          <MenuTrigger
-            render={
-              <IconButton
-                variant="ghost"
-                size="icon-xs"
-                label="New editor rail item"
-                title="New"
-                className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <PlusIcon className="size-3.5" />
-              </IconButton>
-            }
+      {props.workspaceId === null ? (
+        <div className="flex shrink-0 items-center gap-0.5">
+          {newItemMenu}
+          <EditorChatHistoryMenu
+            projectId={props.projectId}
+            workspaceId={props.workspaceId}
+            activeThreadId={props.activeThreadId}
+            onNavigateToThread={openChatTab}
           />
-          <ComposerPickerMenuPopup
-            align="start"
-            side="bottom"
-            sideOffset={6}
-            className="w-44 min-w-44"
-          >
-            <MenuItem onClick={props.onNewChat}>
-              <MessageCircleIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span>New chat</span>
-            </MenuItem>
-            <MenuItem onClick={newTerminalTab}>
-              <TerminalIcon className="size-3.5 shrink-0 text-muted-foreground" />
-              <span>New terminal</span>
-            </MenuItem>
-          </ComposerPickerMenuPopup>
-        </Menu>
-        <EditorChatHistoryMenu
-          projectId={props.projectId}
-          workspaceId={props.workspaceId}
-          activeThreadId={props.activeThreadId}
-          onNavigateToThread={openChatTab}
-        />
-      </div>
+        </div>
+      ) : null}
       {shouldShowTabs ? (
         // Same chip tabs as the right dock's pane strip so every tab row in the
-        // app reads identically. Pushed to the header's right edge (ml-auto) so the
-        // title and new/history controls stay grouped on the left.
-        <div className="relative ml-auto min-w-0 flex-1 [container-type:inline-size]">
+        // app reads identically. Workspace tabs start at the worktree-title edge;
+        // editor-rail tabs keep their legacy right alignment.
+        <div
+          className={cn(
+            "relative min-w-0 flex-1 [container-type:inline-size]",
+            props.workspaceId === null && "ml-auto",
+          )}
+        >
           <div
             ref={tabStripRef}
             className="overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             aria-label="Open workspace tabs"
           >
-            <div className="flex w-max min-w-full items-center justify-end gap-1">
+            <div
+              className={cn(
+                "flex w-max min-w-full items-center gap-1",
+                props.workspaceId === null ? "justify-end" : "justify-start",
+              )}
+            >
               {chatTabs.map((thread) => {
                 const active = props.activeSurface === "chat" && thread.id === props.activeThreadId;
                 return (
@@ -647,6 +657,7 @@ function EditorRailTabs(props: {
                   onClose={closeTerminalTab}
                 />
               ) : null}
+              {props.workspaceId !== null ? newItemMenu : null}
             </div>
           </div>
         </div>
