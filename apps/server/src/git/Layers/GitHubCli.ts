@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubRepositorySummary,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -170,6 +171,59 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   sshUrl: TrimmedNonEmptyString,
 });
 
+const RawGraphQlErrorSchema = Schema.Struct({
+  message: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawGitHubRepositorySummarySchema = Schema.Struct({
+  nameWithOwner: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  defaultBranchRef: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        name: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
+  pushedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  isPrivate: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  isArchived: Schema.optional(Schema.NullOr(Schema.Boolean)),
+});
+
+const RawGitHubRepositoryListResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        viewer: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              repositories: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    nodes: Schema.optional(
+                      Schema.NullOr(Schema.Array(Schema.NullOr(RawGitHubRepositorySummarySchema))),
+                    ),
+                    pageInfo: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          hasNextPage: Schema.optional(Schema.NullOr(Schema.Boolean)),
+                          endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                        }),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
 // `gh pr view --json statusCheckRollup` mixes CheckRun and StatusContext nodes; both are
 // covered by one permissive shape and told apart by which fields are populated.
 const RawStatusCheckRollupItemSchema = Schema.Struct({
@@ -283,6 +337,31 @@ const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
+const REPOSITORY_PAGE_SIZE = 100;
+const REPOSITORY_PAGE_LIMIT = 5;
+const LIST_REPOSITORIES_QUERY = `
+  query SynaraRepositories($first: Int!, $after: String) {
+    viewer {
+      repositories(
+        first: $first
+        after: $after
+        affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
+        orderBy: { field: PUSHED_AT, direction: DESC }
+      ) {
+        nodes {
+          nameWithOwner
+          url
+          description
+          defaultBranchRef { name }
+          pushedAt
+          isPrivate
+          isArchived
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
 
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
@@ -311,10 +390,6 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     }
   }
 }`;
-
-const RawGraphQlErrorSchema = Schema.Struct({
-  message: Schema.optional(Schema.NullOr(Schema.String)),
-});
 
 const RawReviewThreadCommentSchema = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -672,9 +747,9 @@ function normalizePullRequestReviewComments(
   return comments;
 }
 
-function getGraphQlErrorDetail(
-  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
-): string | null {
+function getGraphQlErrorDetail(raw: {
+  readonly errors?: ReadonlyArray<{ readonly message?: string | null } | null> | null;
+}): string | null {
   const messages =
     raw.errors
       ?.flatMap((error) => {
@@ -683,6 +758,20 @@ function getGraphQlErrorDetail(
       })
       .join("; ") ?? "";
   return messages.length > 0 ? `GitHub GraphQL returned errors: ${messages}` : null;
+}
+
+function normalizeRepositorySummary(
+  raw: Schema.Schema.Type<typeof RawGitHubRepositorySummarySchema>,
+): GitHubRepositorySummary {
+  return {
+    nameWithOwner: raw.nameWithOwner,
+    url: raw.url,
+    description: raw.description?.trim() || null,
+    defaultBranch: raw.defaultBranchRef?.name ?? null,
+    pushedAt: raw.pushedAt?.trim() || null,
+    isPrivate: raw.isPrivate === true,
+    isArchived: raw.isArchived === true,
+  };
 }
 
 function getPullRequestReviewThreadsPageInfo(
@@ -713,6 +802,7 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "listPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
+    | "listRepositories"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
     | "listRepositoryPullRequests"
@@ -1407,6 +1497,53 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.map(normalizeRepositoryCloneUrls),
       ),
+    listRepositories: (input) =>
+      Effect.gen(function* () {
+        const repositories: GitHubRepositorySummary[] = [];
+        let after: string | null = null;
+        let fetchedPages = 0;
+
+        do {
+          fetchedPages += 1;
+          const raw = yield* execute({
+            cwd: input.cwd,
+            args: [
+              "api",
+              "graphql",
+              "-f",
+              `query=${LIST_REPOSITORIES_QUERY}`,
+              "-F",
+              `first=${REPOSITORY_PAGE_SIZE}`,
+              ...(after ? ["-F", `after=${after}`] : []),
+            ],
+          }).pipe(Effect.map((result) => result.stdout.trim()));
+          const decoded = yield* decodeGitHubJson(
+            raw,
+            RawGitHubRepositoryListResponseSchema,
+            "listRepositories",
+            "GitHub CLI returned invalid repository list JSON.",
+          );
+          const errorDetail = getGraphQlErrorDetail(decoded);
+          if (errorDetail) {
+            return yield* Effect.fail(
+              new GitHubCliError({ operation: "listRepositories", detail: errorDetail }),
+            );
+          }
+
+          const connection = decoded.data?.viewer?.repositories;
+          for (const repository of connection?.nodes ?? []) {
+            if (repository) repositories.push(normalizeRepositorySummary(repository));
+          }
+          const pageInfo = connection?.pageInfo;
+          const canFetchNextPage =
+            pageInfo?.hasNextPage === true &&
+            Boolean(pageInfo.endCursor?.trim()) &&
+            fetchedPages < REPOSITORY_PAGE_LIMIT;
+          after = canFetchNextPage ? (pageInfo?.endCursor?.trim() ?? null) : null;
+        } while (after !== null);
+
+        return repositories;
+      }),
     createPullRequest: (input) =>
       execute({
         cwd: input.cwd,

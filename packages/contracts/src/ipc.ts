@@ -32,6 +32,8 @@ import type {
   GitActionProgressEvent,
   GitCloneRepositoryInput,
   GitCloneRepositoryResult,
+  GitHubListRepositoriesInput,
+  GitHubListRepositoriesResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -550,6 +552,9 @@ export interface NativeApi {
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
     renameBranch: (input: GitRenameBranchInput) => Promise<GitRenameBranchResult>;
     cloneRepository: (input: GitCloneRepositoryInput) => Promise<GitCloneRepositoryResult>;
+    listGitHubRepositories: (
+      input: GitHubListRepositoriesInput,
+    ) => Promise<GitHubListRepositoriesResult>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
     stashAndCheckout: (input: GitStashAndCheckoutInput) => Promise<void>;
     stashDrop: (input: GitStashDropInput) => Promise<void>;

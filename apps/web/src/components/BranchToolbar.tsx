@@ -390,6 +390,8 @@ export default function BranchToolbar({
               render={
                 <button
                   type="button"
+                  aria-label="Choose where this chat runs"
+                  title="Choose where this chat runs"
                   className={
                     isPanel
                       ? ENVIRONMENT_ROW_CLASS_NAME

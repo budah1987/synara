@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { readNativeApi } from "../nativeApi";
 import { cn } from "../lib/utils";
+import { SearchIcon } from "../lib/icons";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -53,6 +54,7 @@ export function WorktreeWorkspaceCreateDialog({
   const [title, setTitle] = useState("New workspace");
   const [sourceKind, setSourceKind] = useState<WorkspaceCreateSource["kind"]>("new-branch");
   const [targetRef, setTargetRef] = useState(defaultTargetRef ?? "HEAD");
+  const [branchQuery, setBranchQuery] = useState("");
   const [pullRequestReference, setPullRequestReference] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
@@ -64,6 +66,7 @@ export function WorktreeWorkspaceCreateDialog({
     setTitle("New workspace");
     setSourceKind("new-branch");
     setTargetRef(defaultTargetRef ?? "HEAD");
+    setBranchQuery("");
     setPullRequestReference("");
     setError(null);
     setIsCreating(false);
@@ -109,6 +112,13 @@ export function WorktreeWorkspaceCreateDialog({
     [branches],
   );
   const selectedBranch = branchOptions.find((branch) => branch.name === targetRef) ?? null;
+  const filteredBranchOptions = useMemo(() => {
+    const normalizedQuery = branchQuery.trim().toLowerCase();
+    if (!normalizedQuery) return branchOptions;
+    return branchOptions.filter((branch) =>
+      [readableBranchName(branch), branch.name].join(" ").toLowerCase().includes(normalizedQuery),
+    );
+  }, [branchOptions, branchQuery]);
   const canCreate =
     title.trim().length > 0 &&
     (sourceKind === "pull-request"
@@ -207,18 +217,42 @@ export function WorktreeWorkspaceCreateDialog({
               />
             </label>
           ) : (
-            <label className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">
+            <div className="grid gap-1.5">
+              <label
+                className="text-xs font-medium text-foreground"
+                htmlFor="workspace-branch-search"
+              >
                 {sourceKind === "new-branch" ? "Target branch" : "Starting branch"}
+              </label>
+              <span className="relative block">
+                <SearchIcon className="pointer-events-none absolute left-3 top-1/2 z-10 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="workspace-branch-search"
+                  type="search"
+                  value={branchQuery}
+                  placeholder="Search branches"
+                  className="[&_input]:pl-8"
+                  disabled={isLoadingBranches}
+                  onChange={(event) => setBranchQuery(event.target.value)}
+                />
               </span>
               <select
+                aria-label={sourceKind === "new-branch" ? "Target branch" : "Starting branch"}
                 value={targetRef}
                 disabled={isLoadingBranches}
                 className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onChange={(event) => setTargetRef(event.target.value)}
+                onChange={(event) => {
+                  setTargetRef(event.target.value);
+                  setBranchQuery("");
+                }}
               >
                 {branchOptions.length === 0 ? <option value={targetRef}>{targetRef}</option> : null}
-                {branchOptions.map((branch) => (
+                {selectedBranch && !filteredBranchOptions.includes(selectedBranch) ? (
+                  <option value={selectedBranch.name}>
+                    {readableBranchName(selectedBranch)} · selected
+                  </option>
+                ) : null}
+                {filteredBranchOptions.map((branch) => (
                   <option
                     key={`${branch.isRemote ? "remote" : "local"}:${branch.name}`}
                     value={branch.name}
@@ -230,7 +264,10 @@ export function WorktreeWorkspaceCreateDialog({
                   </option>
                 ))}
               </select>
-            </label>
+              {!isLoadingBranches && branchQuery.trim() && filteredBranchOptions.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No branches match your search.</p>
+              ) : null}
+            </div>
           )}
 
           {sourceKind === "branch" ? (

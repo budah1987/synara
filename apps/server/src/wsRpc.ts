@@ -1047,6 +1047,13 @@ export const makeWsRpcLayer = () =>
             }),
             "Failed to clone GitHub repository",
           ),
+        [WS_METHODS.gitListGitHubRepositories]: () =>
+          rpcEffect(
+            gitHubCli
+              .listRepositories({ cwd: config.homeDir })
+              .pipe(Effect.map((repositories) => ({ repositories: [...repositories] }))),
+            "Failed to list GitHub repositories",
+          ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(
             Effect.scoped(git.checkoutBranch(input)).pipe(

@@ -8,6 +8,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
+  GitHubRepositorySummary,
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestActor,
@@ -268,6 +269,14 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
   }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
+
+  /**
+   * List repositories available to the authenticated GitHub account, including
+   * organization and collaborator access.
+   */
+  readonly listRepositories: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<GitHubRepositorySummary>, GitHubCliError>;
 
   /**
    * Create a pull request from branch context and body file.

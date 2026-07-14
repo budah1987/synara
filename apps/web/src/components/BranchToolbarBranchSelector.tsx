@@ -839,6 +839,8 @@ export function BranchToolbarBranchSelector({
       value={resolvedActiveBranch}
     >
       <ComboboxTrigger
+        aria-label="Choose branch"
+        title="Choose branch"
         className={
           isPanel
             ? ENVIRONMENT_ROW_CLASS_NAME

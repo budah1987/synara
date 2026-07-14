@@ -2861,6 +2861,13 @@ export default function Sidebar() {
     [addProjectFromPath],
   );
 
+  const handleListGitHubRepositories = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api) throw new Error("Synara is not connected to the local server.");
+    const result = await api.git.listGitHubRepositories({});
+    return result.repositories;
+  }, []);
+
   const canAddProject = newCwd.trim().length > 0 && !isAddingProject;
 
   // Keep the native folder picker and project creation in one awaited flow so
@@ -8093,6 +8100,7 @@ export default function Sidebar() {
         open={githubProjectDialogOpen}
         onOpenChange={setGitHubProjectDialogOpen}
         onClone={handleCloneGitHubProject}
+        onListRepositories={handleListGitHubRepositories}
       />
 
       <WorktreeWorkspaceCreateDialog

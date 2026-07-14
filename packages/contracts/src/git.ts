@@ -251,6 +251,9 @@ export const GitCloneRepositoryInput = Schema.Struct({
 });
 export type GitCloneRepositoryInput = typeof GitCloneRepositoryInput.Type;
 
+export const GitHubListRepositoriesInput = Schema.Struct({});
+export type GitHubListRepositoriesInput = typeof GitHubListRepositoriesInput.Type;
+
 export const GitCheckoutInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -422,6 +425,22 @@ export const GitCloneRepositoryResult = Schema.Struct({
   reused: Schema.Boolean,
 });
 export type GitCloneRepositoryResult = typeof GitCloneRepositoryResult.Type;
+
+export const GitHubRepositorySummary = Schema.Struct({
+  nameWithOwner: TrimmedNonEmptyStringSchema,
+  url: TrimmedNonEmptyStringSchema,
+  description: Schema.NullOr(Schema.String),
+  defaultBranch: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  pushedAt: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  isPrivate: Schema.Boolean,
+  isArchived: Schema.Boolean,
+});
+export type GitHubRepositorySummary = typeof GitHubRepositorySummary.Type;
+
+export const GitHubListRepositoriesResult = Schema.Struct({
+  repositories: Schema.Array(GitHubRepositorySummary),
+});
+export type GitHubListRepositoriesResult = typeof GitHubListRepositoriesResult.Type;
 
 export const GitStashInfoResult = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,

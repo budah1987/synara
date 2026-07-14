@@ -195,6 +195,94 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("lists repositories available to the authenticated account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              viewer: {
+                repositories: {
+                  nodes: [
+                    {
+                      nameWithOwner: "octocat/private-tools",
+                      url: "https://github.com/octocat/private-tools",
+                      description: "Developer tooling",
+                      defaultBranchRef: { name: "main" },
+                      pushedAt: "2026-07-14T10:00:00Z",
+                      isPrivate: true,
+                      isArchived: false,
+                    },
+                  ],
+                  pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              viewer: {
+                repositories: {
+                  nodes: [
+                    {
+                      nameWithOwner: "example-org/shared-app",
+                      url: "https://github.com/example-org/shared-app",
+                      description: null,
+                      defaultBranchRef: null,
+                      pushedAt: null,
+                      isPrivate: false,
+                      isArchived: true,
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listRepositories({ cwd: "/repo" });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          nameWithOwner: "octocat/private-tools",
+          url: "https://github.com/octocat/private-tools",
+          description: "Developer tooling",
+          defaultBranch: "main",
+          pushedAt: "2026-07-14T10:00:00Z",
+          isPrivate: true,
+          isArchived: false,
+        },
+        {
+          nameWithOwner: "example-org/shared-app",
+          url: "https://github.com/example-org/shared-app",
+          description: null,
+          defaultBranch: null,
+          pushedAt: null,
+          isPrivate: false,
+          isArchived: true,
+        },
+      ]);
+      expect(mockedRunProcess).toHaveBeenCalledTimes(2);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
+        expect.arrayContaining(["after=cursor-1"]),
+      );
+    }),
+  );
+
   it.effect("normalizes check runs and status contexts from the rollup", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
