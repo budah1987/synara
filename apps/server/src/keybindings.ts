@@ -124,6 +124,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+9", command: "thread.jump.9", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+  { key: "mod+alt+arrowdown", command: "workspace.visible.next", when: "!terminalFocus" },
+  { key: "mod+alt+arrowup", command: "workspace.visible.previous", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
 ];
 

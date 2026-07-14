@@ -398,6 +398,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { dedupeRemoteBranchesWithLocalMatches } from "./BranchToolbar.logic";
 import { dispatchThreadNotes } from "~/pinnedMessages";
 import {
   mergeProjectInstructionsIntoThreadNotes,
@@ -1109,6 +1110,7 @@ export default function ChatView({
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
+  const worktreeWorkspaces = useStore((store) => store.worktreeWorkspaces ?? []);
   const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -1682,6 +1684,18 @@ export default function ChatView({
     [draftThread, fallbackDraftProject?.defaultModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
+  const activeWorktreeWorkspace = useMemo(
+    () =>
+      activeThread?.workspaceId
+        ? (worktreeWorkspaces.find(
+            (workspace) =>
+              workspace.id === activeThread.workspaceId && workspace.deletedAt === null,
+          ) ?? null)
+        : null,
+    [activeThread?.workspaceId, worktreeWorkspaces],
+  );
+  const [updatingWorkspaceTargetId, setUpdatingWorkspaceTargetId] =
+    useState<WorktreeWorkspaceId | null>(null);
   useEffect(() => {
     if (
       pendingFileUndo &&
@@ -3260,6 +3274,52 @@ export default function ChatView({
   const isMentionTrigger = composerTriggerKind === "mention";
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const branchesQuery = useQuery(gitBranchesQueryOptions(gitBranchSourceCwd));
+  const workspaceTargetBranchOptions = useMemo(() => {
+    if (!activeWorktreeWorkspace) return [];
+
+    const options = dedupeRemoteBranchesWithLocalMatches(branchesQuery.data?.branches ?? [])
+      .filter((branch) => branch.name !== activeWorktreeWorkspace.branch)
+      .sort((left, right) => {
+        if (left.name === activeWorktreeWorkspace.targetRef) return -1;
+        if (right.name === activeWorktreeWorkspace.targetRef) return 1;
+        if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
+        if (Boolean(left.isRemote) !== Boolean(right.isRemote)) return left.isRemote ? 1 : -1;
+        return left.name.localeCompare(right.name);
+      })
+      .map((branch) => branch.name);
+
+    return options.includes(activeWorktreeWorkspace.targetRef)
+      ? options
+      : [activeWorktreeWorkspace.targetRef, ...options];
+  }, [activeWorktreeWorkspace, branchesQuery.data?.branches]);
+  const handleWorkspaceTargetRefChange = useCallback(
+    async (targetRef: string) => {
+      const workspace = activeWorktreeWorkspace;
+      const api = readNativeApi();
+      if (!workspace || !api || targetRef === workspace.targetRef) return;
+
+      setUpdatingWorkspaceTargetId(workspace.id);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.meta.update",
+          commandId: newCommandId(),
+          workspaceId: workspace.id,
+          targetRef,
+          updatedAt: new Date().toISOString(),
+        });
+        syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to change target branch",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      } finally {
+        setUpdatingWorkspaceTargetId((current) => (current === workspace.id ? null : current));
+      }
+    },
+    [activeWorktreeWorkspace, syncServerWorkspaceShellSnapshot],
+  );
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
     serverConfigQuery.data?.homeDir ?? null,
     isMacPlatform(platform),
@@ -3348,12 +3408,18 @@ export default function ChatView({
   const workspaceEntries = workspaceEntriesQuery.data?.entries ?? EMPTY_PROJECT_ENTRIES;
   const activeRootBranch = useMemo(
     () =>
+      activeWorktreeWorkspace?.targetRef ??
       resolveComposerSlashRootBranch({
         branches: branchesQuery.data?.branches,
         activeProjectCwd: activeProject?.cwd,
         activeThreadBranch: activeThread?.branch,
       }),
-    [activeProject?.cwd, activeThread?.branch, branchesQuery.data?.branches],
+    [
+      activeProject?.cwd,
+      activeThread?.branch,
+      activeWorktreeWorkspace?.targetRef,
+      branchesQuery.data?.branches,
+    ],
   );
   // Keep plugin suggestions referentially stable so prompt-sync effects do not loop on rerender.
   const providerPlugins = useMemo(
@@ -11064,7 +11130,11 @@ export default function ChatView({
           CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
           !isEditorRail && CHAT_SURFACE_HEADER_PADDING_X_CLASS,
           "flex items-center",
-          isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+          isEditorRail
+            ? "h-10"
+            : activeWorktreeWorkspace
+              ? "h-[78px]"
+              : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
           // The editor-rail chat header sits in the editor's second row (inside the
           // right-side chat pane), not flush against the window edges — the editor's
@@ -11148,6 +11218,18 @@ export default function ChatView({
                     setRenameThreadTarget({ threadId: targetThreadId, title }),
                   onCloseChat: (targetThreadId, nextThreadId) =>
                     void onCloseWorkspaceChat(targetThreadId, nextThreadId),
+                }
+              : null
+          }
+          workspaceHeader={
+            !isEditorRail && activeWorktreeWorkspace
+              ? {
+                  title: activeWorktreeWorkspace.title,
+                  targetRef: activeWorktreeWorkspace.targetRef,
+                  targetBranchOptions: workspaceTargetBranchOptions,
+                  targetBranchesLoading: branchesQuery.isLoading,
+                  targetRefUpdating: updatingWorkspaceTargetId === activeWorktreeWorkspace.id,
+                  onTargetRefChange: (targetRef) => void handleWorkspaceTargetRefChange(targetRef),
                 }
               : null
           }

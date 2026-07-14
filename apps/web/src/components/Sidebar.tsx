@@ -316,6 +316,8 @@ import {
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
   getNextVisibleSidebarThreadId,
+  getNextVisibleWorkspaceId,
+  getThreadJumpTargetIds,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
@@ -4930,6 +4932,20 @@ export default function Sidebar() {
     () => standardProjects.length > 0 && standardProjects.every((project) => project.expanded),
     [standardProjects],
   );
+  const workspaceNavigationIds = useMemo(
+    () =>
+      standardProjects.flatMap((project) =>
+        worktreeWorkspaces
+          .filter(
+            (workspace) =>
+              workspace.projectId === project.id &&
+              workspace.deletedAt === null &&
+              sidebarDisplayThreads.some((thread) => thread.workspaceId === workspace.id),
+          )
+          .map((workspace) => workspace.id),
+      ),
+    [sidebarDisplayThreads, standardProjects, worktreeWorkspaces],
+  );
 
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
@@ -5166,6 +5182,26 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  const activeWorkspaceId = useMemo(
+    () =>
+      sidebarDisplayThreads.find((thread) => thread.id === activeSidebarThreadId)?.workspaceId ??
+      null,
+    [activeSidebarThreadId, sidebarDisplayThreads],
+  );
+  const workspaceConversationThreadIds = useMemo(
+    () =>
+      activeWorkspaceId
+        ? sortThreadsForSidebar(
+            sidebarDisplayThreads.filter((thread) => thread.workspaceId === activeWorkspaceId),
+            appSettings.sidebarThreadSortOrder,
+          ).map((thread) => thread.id)
+        : [],
+    [activeWorkspaceId, appSettings.sidebarThreadSortOrder, sidebarDisplayThreads],
+  );
+  const shortcutConversationThreadIds =
+    activeWorkspaceId && workspaceConversationThreadIds.length > 0
+      ? workspaceConversationThreadIds
+      : visibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
     () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
     [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
@@ -5272,7 +5308,9 @@ export default function Sidebar() {
   const isManualProjectSorting = appSettings.sidebarProjectSortOrder === "manual";
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
-    for (const [visibleThreadIndex, threadId] of visibleSidebarThreadIds.entries()) {
+    for (const [visibleThreadIndex, threadId] of getThreadJumpTargetIds(
+      shortcutConversationThreadIds,
+    ).entries()) {
       const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
       if (!jumpCommand) {
         break;
@@ -5281,7 +5319,7 @@ export default function Sidebar() {
     }
 
     return mapping;
-  }, [visibleSidebarThreadIds]);
+  }, [shortcutConversationThreadIds]);
   const threadJumpThreadIds = useMemo(
     () => [...threadJumpCommandByThreadId.keys()],
     [threadJumpCommandByThreadId],
@@ -6584,6 +6622,28 @@ export default function Sidebar() {
         }
         return;
       }
+      if (command === "workspace.visible.next" || command === "workspace.visible.previous") {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextWorkspaceId = getNextVisibleWorkspaceId({
+          visibleWorkspaceIds: workspaceNavigationIds,
+          activeWorkspaceId,
+          direction: command === "workspace.visible.previous" ? "backward" : "forward",
+        });
+        if (!nextWorkspaceId || nextWorkspaceId === activeWorkspaceId) return;
+
+        const workspaceThreads = sortThreadsForSidebar(
+          sidebarDisplayThreads.filter((thread) => thread.workspaceId === nextWorkspaceId),
+          appSettings.sidebarThreadSortOrder,
+        );
+        const rememberedThreadId = readEditorRailActiveChat(`workspace:${nextWorkspaceId}`);
+        const targetThread =
+          workspaceThreads.find((thread) => thread.id === rememberedThreadId) ??
+          workspaceThreads[0] ??
+          null;
+        if (targetThread) activateThreadFromSidebarIntent(targetThread.id);
+        return;
+      }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
         return;
       }
@@ -6591,7 +6651,7 @@ export default function Sidebar() {
       event.preventDefault();
       event.stopPropagation();
       const nextThreadId = getNextVisibleSidebarThreadId({
-        visibleThreadIds: visibleSidebarThreadIds,
+        visibleThreadIds: shortcutConversationThreadIds,
         activeThreadId: activeSidebarThreadId ?? undefined,
         direction: command === "chat.visible.previous" ? "backward" : "forward",
       });
@@ -6638,6 +6698,8 @@ export default function Sidebar() {
   }, [
     activateThreadFromSidebarIntent,
     activeSidebarThreadId,
+    activeWorkspaceId,
+    appSettings.sidebarThreadSortOrder,
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
@@ -6645,7 +6707,9 @@ export default function Sidebar() {
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
-    visibleSidebarThreadIds,
+    shortcutConversationThreadIds,
+    sidebarDisplayThreads,
+    workspaceNavigationIds,
   ]);
 
   useEffect(() => {

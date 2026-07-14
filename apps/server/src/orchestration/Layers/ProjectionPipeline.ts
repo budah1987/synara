@@ -693,6 +693,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...existing.value,
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+            ...(event.payload.targetRef !== undefined
+              ? { targetRef: event.payload.targetRef }
+              : {}),
             mutationRevision: event.payload.mutationRevision,
             updatedAt: event.payload.updatedAt,
           });

@@ -697,16 +697,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         workspaceId: command.workspaceId,
       });
-      if (command.title === undefined && command.branch === undefined) {
+      if (
+        command.title === undefined &&
+        command.branch === undefined &&
+        command.targetRef === undefined
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Workspace metadata update for '${workspace.id}' did not include any changes.`,
         });
       }
-      if (command.branch !== undefined && workspace.state !== "ready") {
+      if (
+        (command.branch !== undefined || command.targetRef !== undefined) &&
+        workspace.state !== "ready"
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Workspace '${workspace.id}' cannot change branches while ${workspace.state}.`,
+          detail: `Workspace '${workspace.id}' cannot change git refs while ${workspace.state}.`,
         });
       }
       return {
@@ -721,6 +728,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workspaceId: command.workspaceId,
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
+          ...(command.targetRef !== undefined ? { targetRef: command.targetRef } : {}),
           mutationRevision: workspace.mutationRevision + 1,
           updatedAt: command.updatedAt,
         },

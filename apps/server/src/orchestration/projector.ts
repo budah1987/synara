@@ -446,6 +446,7 @@ export function projectEvent(
             workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
               ...(payload.title !== undefined ? { title: payload.title } : {}),
               ...(nextBranch !== undefined ? { branch: nextBranch } : {}),
+              ...(payload.targetRef !== undefined ? { targetRef: payload.targetRef } : {}),
               mutationRevision: payload.mutationRevision,
               updatedAt: payload.updatedAt,
             }),

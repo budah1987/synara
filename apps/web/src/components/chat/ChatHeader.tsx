@@ -31,12 +31,14 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  ChevronDownIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
   TerminalIcon,
+  WorktreeIcon,
   XIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -74,6 +76,15 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { readNativeApi } from "../../nativeApi";
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxTrigger,
+} from "../ui/combobox";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -145,6 +156,14 @@ interface ChatHeaderProps {
     onCloseTerminal: () => void;
     onRenameChat: (threadId: ThreadId, title: string) => void;
     onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
+  } | null;
+  workspaceHeader?: {
+    title: string;
+    targetRef: string;
+    targetBranchOptions: readonly string[];
+    targetBranchesLoading: boolean;
+    targetRefUpdating: boolean;
+    onTargetRefChange: (targetRef: string) => void;
   } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -648,6 +667,77 @@ export function resolveChatHeaderThreadIconKind(
   return entryPoint === "terminal" ? "terminal" : "provider";
 }
 
+function WorkspaceTargetBranchControl(props: NonNullable<ChatHeaderProps["workspaceHeader"]>) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = useMemo(
+    () =>
+      normalizedQuery.length === 0
+        ? props.targetBranchOptions
+        : props.targetBranchOptions.filter((branch) =>
+            branch.toLowerCase().includes(normalizedQuery),
+          ),
+    [normalizedQuery, props.targetBranchOptions],
+  );
+
+  return (
+    <Combobox
+      items={props.targetBranchOptions}
+      filteredItems={filteredOptions}
+      open={open}
+      value={props.targetRef}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setQuery("");
+      }}
+    >
+      <ComboboxTrigger
+        aria-label={`Change target branch. Current target: ${props.targetRef}`}
+        className="flex h-7 min-w-0 max-w-[min(16rem,30vw)] shrink items-center gap-1 rounded-lg px-2 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 [-webkit-app-region:no-drag]"
+        disabled={
+          props.targetRefUpdating ||
+          (props.targetBranchesLoading && props.targetBranchOptions.length === 0)
+        }
+      >
+        <span className="shrink-0">Target:</span>
+        <span className="min-w-0 truncate font-medium text-foreground">{props.targetRef}</span>
+        <ChevronDownIcon className="size-3 shrink-0 opacity-55" aria-hidden />
+      </ComboboxTrigger>
+      <ComboboxPopup align="start" side="bottom" sideOffset={5} className="w-72">
+        <div className="border-b p-1">
+          <ComboboxInput
+            autoFocus
+            className="rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0"
+            inputClassName="ring-0"
+            placeholder="Search target branches…"
+            showTrigger={false}
+            size="sm"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <ComboboxEmpty>No target branches found.</ComboboxEmpty>
+        <ComboboxList className="max-h-64">
+          {filteredOptions.map((branch) => (
+            <ComboboxItem
+              key={branch}
+              value={branch}
+              onClick={() => {
+                setOpen(false);
+                setQuery("");
+                if (branch !== props.targetRef) props.onTargetRefChange(branch);
+              }}
+            >
+              <span className="block min-w-0 truncate">{branch}</span>
+            </ComboboxItem>
+          ))}
+        </ComboboxList>
+      </ComboboxPopup>
+    </Combobox>
+  );
+}
+
 export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   activeThreadTitle,
@@ -683,6 +773,7 @@ export const ChatHeader = memo(function ChatHeader({
   chatLayoutAction = null,
   changeThreadAction = null,
   editorChatControls = null,
+  workspaceHeader = null,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -786,255 +877,292 @@ export const ChatHeader = memo(function ChatHeader({
     </Tooltip>
   ) : null;
 
+  const editorTabs = editorChatControls ? (
+    <EditorRailTabs
+      key={editorChatControls.workspaceId ?? editorChatControls.projectId}
+      projectId={editorChatControls.projectId}
+      workspaceId={editorChatControls.workspaceId}
+      activeThreadId={activeThreadId}
+      activeThreadTitle={activeThreadTitle}
+      activeProvider={activeProvider}
+      activeSurface={editorChatControls.activeSurface}
+      terminalAvailable={editorChatControls.terminalAvailable}
+      terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
+      onNewChat={editorChatControls.onNewChat}
+      onNewTerminal={editorChatControls.onNewTerminal}
+      onOpenChat={editorChatControls.onOpenChat}
+      onOpenTerminal={editorChatControls.onOpenTerminal}
+      onCloseTerminal={editorChatControls.onCloseTerminal}
+      onRenameChat={editorChatControls.onRenameChat}
+      onCloseChat={editorChatControls.onCloseChat}
+      onNavigateToThread={onNavigateToThread}
+    />
+  ) : null;
+
   return (
-    <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
+    <div
+      ref={headerRef}
+      className={cn(
+        "flex min-w-0 flex-1 gap-2",
+        workspaceHeader ? "flex-col" : "items-center",
+        className,
+      )}
+    >
       <div
         className={cn(
-          "flex min-w-0 flex-1 items-center",
-          editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
-          !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
+          "flex min-w-0 w-full items-center gap-2",
+          workspaceHeader ? "h-10" : "h-full",
         )}
       >
-        {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
         <div
-          className={cn("flex min-w-0 flex-1 items-center gap-2", editorChatControls && "h-full")}
+          className={cn(
+            "flex min-w-0 flex-1 items-center",
+            editorChatControls ? "h-full overflow-visible" : "overflow-hidden",
+            !isMobile && state === "collapsed" ? "gap-4" : "gap-2 sm:gap-3",
+          )}
         >
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 flex-col",
-              editorChatControls && "h-full justify-center",
-            )}
-          >
-            {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
-                {threadBreadcrumbs.map((breadcrumb, index) => (
-                  <React.Fragment key={breadcrumb.threadId}>
-                    {index > 0 ? (
-                      <span className="shrink-0 text-muted-foreground/35">/</span>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="min-w-0 truncate transition-colors hover:text-foreground/80"
-                      title={breadcrumb.title}
-                      onClick={() => onNavigateToThread(breadcrumb.threadId)}
-                    >
-                      {breadcrumb.title}
-                    </button>
-                  </React.Fragment>
-                ))}
-              </div>
-            ) : null}
-            <div className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}>
+          {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
+          {workspaceHeader ? (
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <WorktreeIcon className="size-3.5 shrink-0 text-muted-foreground/80" aria-hidden />
+              <h2
+                className="min-w-0 max-w-[clamp(8rem,30vw,28rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground"
+                title={workspaceHeader.title}
+              >
+                {workspaceHeader.title}
+              </h2>
+              <WorkspaceTargetBranchControl {...workspaceHeader} />
+            </div>
+          ) : (
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2",
+                editorChatControls && "h-full",
+              )}
+            >
               <div
                 className={cn(
-                  "flex min-w-0 items-center gap-2",
-                  showSidechatTitleChip &&
-                    "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
+                  "flex min-w-0 flex-1 flex-col",
+                  editorChatControls && "h-full justify-center",
                 )}
               >
-                {threadIconKind === "none" ? null : (
-                  <span
-                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
-                    title={
-                      threadIconKind === "terminal"
-                        ? "Terminal"
-                        : PROVIDER_DISPLAY_NAMES[activeProvider]
-                    }
-                  >
-                    {threadIconKind === "terminal" ? (
-                      <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
-                    ) : (
-                      renderProviderIcon(activeProvider, "size-3.5")
-                    )}
-                  </span>
-                )}
-                <h2
-                  className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
-                  title={activeThreadTitle}
-                  onDoubleClick={() => onRenameThread()}
-                >
-                  {activeThreadTitle}
-                </h2>
-                {showSidechatTitleChip && onCloseThreadPane ? (
-                  <IconButton
-                    variant="chrome"
-                    size="icon-xs"
-                    label="Close selected Side"
-                    tooltip="Close selected Side"
-                    tooltipSide="bottom"
-                    className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseThreadPane();
-                    }}
-                  >
-                    <XIcon />
-                  </IconButton>
+                {threadBreadcrumbs.length > 0 ? (
+                  <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
+                    {threadBreadcrumbs.map((breadcrumb, index) => (
+                      <React.Fragment key={breadcrumb.threadId}>
+                        {index > 0 ? (
+                          <span className="shrink-0 text-muted-foreground/35">/</span>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="min-w-0 truncate transition-colors hover:text-foreground/80"
+                          title={breadcrumb.title}
+                          onClick={() => onNavigateToThread(breadcrumb.threadId)}
+                        >
+                          {breadcrumb.title}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  </div>
                 ) : null}
-              </div>
-              {editorChatControls ? (
-                <EditorRailTabs
-                  key={editorChatControls.workspaceId ?? editorChatControls.projectId}
-                  projectId={editorChatControls.projectId}
-                  workspaceId={editorChatControls.workspaceId}
-                  activeThreadId={activeThreadId}
-                  activeThreadTitle={activeThreadTitle}
-                  activeProvider={activeProvider}
-                  activeSurface={editorChatControls.activeSurface}
-                  terminalAvailable={editorChatControls.terminalAvailable}
-                  terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
-                  onNewChat={editorChatControls.onNewChat}
-                  onNewTerminal={editorChatControls.onNewTerminal}
-                  onOpenChat={editorChatControls.onOpenChat}
-                  onOpenTerminal={editorChatControls.onOpenTerminal}
-                  onCloseTerminal={editorChatControls.onCloseTerminal}
-                  onRenameChat={editorChatControls.onRenameChat}
-                  onCloseChat={editorChatControls.onCloseChat}
-                  onNavigateToThread={onNavigateToThread}
-                />
-              ) : null}
-              {!hideHandoffControls && handoffBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Badge
-                        variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                <div
+                  className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}
+                >
+                  <div
+                    className={cn(
+                      "flex min-w-0 items-center gap-2",
+                      showSidechatTitleChip &&
+                        "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
+                    )}
+                  >
+                    {threadIconKind === "none" ? null : (
+                      <span
+                        className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                        title={
+                          threadIconKind === "terminal"
+                            ? "Terminal"
+                            : PROVIDER_DISPLAY_NAMES[activeProvider]
+                        }
                       >
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-                        </span>
-                        <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-                        </span>
-                      </Badge>
-                    }
-                  />
-                  <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-                </Tooltip>
-              ) : null}
+                        {threadIconKind === "terminal" ? (
+                          <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
+                        ) : (
+                          renderProviderIcon(activeProvider, "size-3.5")
+                        )}
+                      </span>
+                    )}
+                    <h2
+                      className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
+                      title={activeThreadTitle}
+                      onDoubleClick={() => onRenameThread()}
+                    >
+                      {activeThreadTitle}
+                    </h2>
+                    {showSidechatTitleChip && onCloseThreadPane ? (
+                      <IconButton
+                        variant="chrome"
+                        size="icon-xs"
+                        label="Close selected Side"
+                        tooltip="Close selected Side"
+                        tooltipSide="bottom"
+                        className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onCloseThreadPane();
+                        }}
+                      >
+                        <XIcon />
+                      </IconButton>
+                    ) : null}
+                  </div>
+                  {editorTabs}
+                  {!hideHandoffControls && handoffBadgeLabel ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Badge
+                            variant="outline"
+                            className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                          >
+                            <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                              {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
+                            </span>
+                            <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
+                            <span className="inline-flex size-4 shrink-0 items-center justify-center">
+                              {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
+                            </span>
+                          </Badge>
+                        }
+                      />
+                      <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
         </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-        {!hideHandoffControls && !environment ? (
-          <ProviderUsageMenuControl provider={activeProvider} />
-        ) : null}
-        {!hideHandoffControls ? (
-          <Menu modal={false}>
+        <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+          {!hideHandoffControls && !environment ? (
+            <ProviderUsageMenuControl provider={activeProvider} />
+          ) : null}
+          {!hideHandoffControls ? (
+            <Menu modal={false}>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <MenuTrigger
+                      render={
+                        <ChatHeaderButton
+                          type="button"
+                          tone="outline"
+                          className={compact ? "gap-1" : "gap-1.5"}
+                          aria-label={handoffActionLabel}
+                          disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        />
+                      }
+                    >
+                      <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
+                      {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    </MenuTrigger>
+                  }
+                />
+                <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+              </Tooltip>
+              <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
+                {handoffActionTargetProviders.map((provider) => (
+                  <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+                    {renderProviderIcon(provider, "size-3.5 shrink-0")}
+                    <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  </MenuItem>
+                ))}
+              </ComposerPickerMenuPopup>
+            </Menu>
+          ) : null}
+          {activeProjectScripts ? (
+            <ProjectScriptsControl
+              scripts={activeProjectScripts}
+              keybindings={keybindings}
+              preferredScriptId={preferredScriptId}
+              hideInlineLabel={compact}
+              onRunScript={onRunProjectScript}
+              onAddScript={onAddProjectScript}
+              onUpdateScript={onUpdateProjectScript}
+              onDeleteScript={onDeleteProjectScript}
+            />
+          ) : null}
+
+          {inlineChatLayoutAction ? (
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <MenuTrigger
-                    render={
-                      <ChatHeaderButton
-                        type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
-                      />
-                    }
+                  <ChatHeaderIconButton
+                    type="button"
+                    label={inlineChatLayoutAction.label}
+                    onClick={inlineChatLayoutAction.onClick}
                   >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
-                  </MenuTrigger>
+                    <HiMiniArrowsPointingOut className="size-3.5" />
+                  </ChatHeaderIconButton>
                 }
               />
-              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+              <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
             </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {renderProviderIcon(provider, "size-3.5 shrink-0")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
-                </MenuItem>
-              ))}
-            </ComposerPickerMenuPopup>
-          </Menu>
-        ) : null}
-        {activeProjectScripts ? (
-          <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            keybindings={keybindings}
-            preferredScriptId={preferredScriptId}
-            hideInlineLabel={compact}
-            onRunScript={onRunProjectScript}
-            onAddScript={onAddProjectScript}
-            onUpdateScript={onUpdateProjectScript}
-            onDeleteScript={onDeleteProjectScript}
-          />
-        ) : null}
+          ) : null}
 
-        {inlineChatLayoutAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={inlineChatLayoutAction.label}
-                  onClick={inlineChatLayoutAction.onClick}
-                >
-                  <HiMiniArrowsPointingOut className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{inlineChatLayoutAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
+          {/* Change thread stays as a standalone control (split/sidechat only). */}
+          {changeThreadAction ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <ChatHeaderIconButton
+                    type="button"
+                    label={changeThreadAction.label}
+                    onClick={changeThreadAction.onClick}
+                  >
+                    <TbExchange className="size-3.5" />
+                  </ChatHeaderIconButton>
+                }
+              />
+              <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
+            </Tooltip>
+          ) : null}
 
-        {/* Change thread stays as a standalone control (split/sidechat only). */}
-        {changeThreadAction ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ChatHeaderIconButton
-                  type="button"
-                  label={changeThreadAction.label}
-                  onClick={changeThreadAction.onClick}
-                >
-                  <TbExchange className="size-3.5" />
-                </ChatHeaderIconButton>
-              }
-            />
-            <TooltipPopup side="bottom">{changeThreadAction.label}</TooltipPopup>
-          </Tooltip>
-        ) : null}
-
-        {/* Environment: one button consolidating Open-in-editor and git actions into the
+          {/* Environment: one button consolidating Open-in-editor and git actions into the
             Environment panel. The right-side diff toggle stays beside it so the familiar
             "open the diff on the right" control is preserved. Falls back to the legacy split
             controls when no environment is resolved. */}
-        {environment ? (
-          <>
-            <EnvironmentToggle environment={environment} />
-            {diffToggleControl}
-          </>
-        ) : (
-          <>
-            {/* Open in editor: dedicated split-button with an editor switcher; the project
+          {environment ? (
+            <>
+              <EnvironmentToggle environment={environment} />
+              {diffToggleControl}
+            </>
+          ) : (
+            <>
+              {/* Open in editor: dedicated split-button with an editor switcher; the project
                 action control now lives beside Hand off as its own project command surface. */}
-            {activeProjectName ? (
-              <OpenInPicker
-                keybindings={keybindings}
-                availableEditors={availableEditors}
-                openInTarget={openInTarget}
-              />
-            ) : null}
+              {activeProjectName ? (
+                <OpenInPicker
+                  keybindings={keybindings}
+                  availableEditors={availableEditors}
+                  openInTarget={openInTarget}
+                />
+              ) : null}
 
-            {activeProjectName && showGitActions ? (
-              <GitActionsControl
-                gitCwd={gitCwd}
-                activeThreadId={activeThreadId}
-                hideQuickActionLabel={compact}
-              />
-            ) : null}
-            {diffToggleControl}
-          </>
-        )}
+              {activeProjectName && showGitActions ? (
+                <GitActionsControl
+                  gitCwd={gitCwd}
+                  activeThreadId={activeThreadId}
+                  hideQuickActionLabel={compact}
+                />
+              ) : null}
+              {diffToggleControl}
+            </>
+          )}
+        </div>
       </div>
+      {workspaceHeader && editorTabs ? (
+        <div className="flex min-h-0 min-w-0 flex-1 items-center">{editorTabs}</div>
+      ) : null}
     </div>
   );
 });

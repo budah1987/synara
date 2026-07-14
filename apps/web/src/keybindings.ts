@@ -144,6 +144,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     shortcut: commandShortcut("tab", { ctrlKey: true, shiftKey: true, modKey: false }),
   },
   {
+    command: "workspace.visible.next",
+    shortcut: commandShortcut("arrowdown", { altKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "workspace.visible.previous",
+    shortcut: commandShortcut("arrowup", { altKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
     command: "modelPicker.toggle",
     shortcut: commandShortcut("m", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,

@@ -8,6 +8,7 @@ import {
   type ProjectId,
   type PullRequestReviewRequestCountResult,
   type ThreadId,
+  type WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
@@ -1145,6 +1146,38 @@ export function getNextVisibleSidebarThreadId(input: {
       : (activeIndex - 1 + visibleThreadIds.length) % visibleThreadIds.length;
 
   return visibleThreadIds[nextIndex] ?? null;
+}
+
+export function getThreadJumpTargetIds(orderedThreadIds: readonly Thread["id"][]): Thread["id"][] {
+  if (orderedThreadIds.length <= THREAD_JUMP_COMMANDS.length) {
+    return [...orderedThreadIds];
+  }
+
+  return [...orderedThreadIds.slice(0, THREAD_JUMP_COMMANDS.length - 1), orderedThreadIds.at(-1)!];
+}
+
+export function getNextVisibleWorkspaceId(input: {
+  visibleWorkspaceIds: readonly WorktreeWorkspaceId[];
+  activeWorkspaceId: WorktreeWorkspaceId | null;
+  direction: "forward" | "backward";
+}): WorktreeWorkspaceId | null {
+  const { activeWorkspaceId, direction, visibleWorkspaceIds } = input;
+  if (visibleWorkspaceIds.length === 0) return null;
+
+  const activeIndex = activeWorkspaceId
+    ? visibleWorkspaceIds.findIndex((workspaceId) => workspaceId === activeWorkspaceId)
+    : -1;
+  if (activeIndex === -1) {
+    return direction === "forward"
+      ? (visibleWorkspaceIds[0] ?? null)
+      : (visibleWorkspaceIds.at(-1) ?? null);
+  }
+
+  const nextIndex =
+    direction === "forward"
+      ? (activeIndex + 1) % visibleWorkspaceIds.length
+      : (activeIndex - 1 + visibleWorkspaceIds.length) % visibleWorkspaceIds.length;
+  return visibleWorkspaceIds[nextIndex] ?? null;
 }
 
 export function getSidebarThreadIdForJumpCommand(input: {

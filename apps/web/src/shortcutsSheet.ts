@@ -154,13 +154,23 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   },
   {
     command: "chat.visible.previous",
-    label: "Previous visible thread",
-    description: "Cycle to the previous thread that is currently visible in the sidebar.",
+    label: "Previous conversation",
+    description: "Cycle to the previous conversation in the active workspace.",
   },
   {
     command: "chat.visible.next",
-    label: "Next visible thread",
-    description: "Cycle to the next thread that is currently visible in the sidebar.",
+    label: "Next conversation",
+    description: "Cycle to the next conversation in the active workspace.",
+  },
+  {
+    command: "workspace.visible.previous",
+    label: "Previous workspace",
+    description: "Move to the previous worktree and restore its last active conversation.",
+  },
+  {
+    command: "workspace.visible.next",
+    label: "Next workspace",
+    description: "Move to the next worktree and restore its last active conversation.",
   },
   {
     command: "editor.openFavorite",

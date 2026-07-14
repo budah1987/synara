@@ -17,8 +17,10 @@ import {
   pullRequestRepositoryConfigFingerprint,
   getPinnedThreadsForSidebar,
   getNextVisibleSidebarThreadId,
+  getNextVisibleWorkspaceId,
   getSidebarThreadIdForJumpCommand,
   getSidebarThreadIdsToPrewarm,
+  getThreadJumpTargetIds,
   getRenderedThreadsForSidebarProject,
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
@@ -49,7 +51,7 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, WorktreeWorkspaceId } from "@synara/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -1394,6 +1396,39 @@ describe("getNextVisibleSidebarThreadId", () => {
         direction: "backward",
       }),
     ).toBe(ThreadId.makeUnsafe("thread-3"));
+  });
+});
+
+describe("workspace keyboard navigation", () => {
+  const workspaceIds = [
+    WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+    WorktreeWorkspaceId.makeUnsafe("workspace-2"),
+    WorktreeWorkspaceId.makeUnsafe("workspace-3"),
+  ];
+
+  it("cycles workspaces in sidebar order with wraparound", () => {
+    expect(
+      getNextVisibleWorkspaceId({
+        visibleWorkspaceIds: workspaceIds,
+        activeWorkspaceId: workspaceIds[2] ?? null,
+        direction: "forward",
+      }),
+    ).toBe(workspaceIds[0]);
+    expect(
+      getNextVisibleWorkspaceId({
+        visibleWorkspaceIds: workspaceIds,
+        activeWorkspaceId: workspaceIds[0] ?? null,
+        direction: "backward",
+      }),
+    ).toBe(workspaceIds[2]);
+  });
+
+  it("assigns command 9 to the last conversation when more than nine are open", () => {
+    const threadIds = Array.from({ length: 12 }, (_, index) =>
+      ThreadId.makeUnsafe(`thread-${index + 1}`),
+    );
+
+    expect(getThreadJumpTargetIds(threadIds)).toEqual([...threadIds.slice(0, 8), threadIds[11]]);
   });
 });
 

@@ -823,6 +823,14 @@ describe("shortcutLabelForCommand", () => {
       "⇧⌘[",
     );
     assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "workspace.visible.next", "MacIntel"),
+      "⌥⌘Down",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "workspace.visible.previous", "MacIntel"),
+      "⌥⌘Up",
+    );
+    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
     );

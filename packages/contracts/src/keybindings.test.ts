@@ -167,6 +167,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
 
+    const parsedWorkspaceNext = yield* decode(KeybindingRule, {
+      key: "mod+alt+arrowdown",
+      command: "workspace.visible.next",
+    });
+    assert.strictEqual(parsedWorkspaceNext.command, "workspace.visible.next");
+
     const parsedRecentNext = yield* decode(KeybindingRule, {
       key: "ctrl+tab",
       command: "view.recent.next",

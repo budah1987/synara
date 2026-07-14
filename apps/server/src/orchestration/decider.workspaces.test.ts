@@ -180,6 +180,7 @@ describe("worktree workspace commands", () => {
           workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr"),
           title: "Shipping details",
           branch: "feature/shipping-details",
+          targetRef: "develop",
           updatedAt: now,
         },
       }),
@@ -189,6 +190,7 @@ describe("worktree workspace commands", () => {
     expect(finalModel.workspaces?.[0]).toMatchObject({
       title: "Shipping details",
       branch: "feature/shipping-details",
+      targetRef: "develop",
       sourceKind: "pull-request",
       mutationRevision: 1,
     });

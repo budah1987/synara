@@ -1094,6 +1094,7 @@ export const WorktreeWorkspaceMetaUpdateCommand = Schema.Struct({
   workspaceId: WorktreeWorkspaceId,
   title: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
+  targetRef: Schema.optional(TrimmedNonEmptyString),
   updatedAt: IsoDateTime,
 });
 
@@ -1847,6 +1848,7 @@ export const WorktreeWorkspaceMetaUpdatedPayload = Schema.Struct({
   workspaceId: WorktreeWorkspaceId,
   title: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
+  targetRef: Schema.optional(TrimmedNonEmptyString),
   mutationRevision: NonNegativeInt,
   updatedAt: IsoDateTime,
 });
