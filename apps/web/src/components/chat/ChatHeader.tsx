@@ -510,6 +510,7 @@ function EditorRailTabs(props: {
                 />
               }
               closeLabel={`Close ${thread.title}`}
+              closePlacement="trailing"
               onSelect={() => openChatTab(thread.id)}
               onClose={() => closeChatTab(thread.id)}
               onDoubleClick={() => props.onRenameChat(thread.id, thread.title)}

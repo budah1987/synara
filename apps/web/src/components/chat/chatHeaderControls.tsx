@@ -171,13 +171,20 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
 
+/** Dedicated trailing close control for tabs whose identity glyph must remain stable.
+ *  Its footprint is always reserved so revealing it never shifts the tab label. */
+export const DOCK_TAB_TRAILING_CLOSE_CLASS_NAME =
+  "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-foreground-secondary)] opacity-0 transition-[color,background-color,opacity] group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] focus-visible:opacity-100";
+
 /**
  * Shared flat tab chip for every chat surface that renders a row of closable tabs —
  * the right-dock tab strip and both terminal tab bars (pane-local tabs + workspace
  * group tabs). At rest the chip shows {@link icon}; hovering or focusing within the
- * chip fades that glyph out and reveals a circular close affordance, but only when
- * an {@link onClose} handler is supplied (tabs that can't be closed render a static
- * icon slot instead).
+ * chip fades that glyph out and reveals a circular close affordance by default, but
+ * only when an {@link onClose} handler is supplied (tabs that can't be closed render
+ * a static icon slot instead). `closePlacement="trailing"` keeps the identity glyph
+ * stable and gives Close a separate trailing hit target, which is required when the
+ * label also has a double-click gesture such as Rename.
  *
  * The icon→close-X reveal is driven entirely by the `group/dock-tab` named group
  * the chip declares here, so the hover wiring lives in exactly one place. Call
@@ -198,6 +205,7 @@ export function SurfaceTabChip({
   className,
   labelClassName,
   closeLabel,
+  closePlacement = "leading-swap",
   onSelect,
   onClose,
   onDoubleClick,
@@ -212,6 +220,7 @@ export function SurfaceTabChip({
   className?: string | undefined;
   labelClassName?: string | undefined;
   closeLabel?: string | undefined;
+  closePlacement?: "leading-swap" | "trailing" | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onDoubleClick?: (() => void) | undefined;
@@ -227,7 +236,7 @@ export function SurfaceTabChip({
       )}
       onContextMenu={onContextMenu}
     >
-      {onClose ? (
+      {onClose && closePlacement === "leading-swap" ? (
         <button
           type="button"
           className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
@@ -280,6 +289,20 @@ export function SurfaceTabChip({
           {trailing}
         </span>
       )}
+      {onClose && closePlacement === "trailing" ? (
+        <button
+          type="button"
+          className={DOCK_TAB_TRAILING_CLOSE_CLASS_NAME}
+          aria-label={closeLabel}
+          title={closeLabel}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose();
+          }}
+        >
+          <CentralIcon name="cross-small" className="size-3.5 shrink-0" />
+        </button>
+      ) : null}
     </div>
   );
 }
