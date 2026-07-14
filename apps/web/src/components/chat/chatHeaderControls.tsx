@@ -11,7 +11,7 @@
 //      the chrome here keeps the row visually coherent and lets new controls opt in
 //      with one import instead of re-deriving the magic classes.
 
-import { forwardRef, type ComponentProps, type ReactNode } from "react";
+import { forwardRef, type ComponentProps, type MouseEventHandler, type ReactNode } from "react";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 
@@ -200,6 +200,8 @@ export function SurfaceTabChip({
   closeLabel,
   onSelect,
   onClose,
+  onDoubleClick,
+  onContextMenu,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -212,6 +214,8 @@ export function SurfaceTabChip({
   closeLabel?: string | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
+  onDoubleClick?: (() => void) | undefined;
+  onContextMenu?: MouseEventHandler<HTMLDivElement> | undefined;
 }) {
   return (
     <div
@@ -221,6 +225,7 @@ export function SurfaceTabChip({
         active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
         className,
       )}
+      onContextMenu={onContextMenu}
     >
       {onClose ? (
         <button
@@ -243,15 +248,19 @@ export function SurfaceTabChip({
       ) : (
         <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
       )}
-      {onSelect ? (
+      {onSelect || onDoubleClick ? (
         <button
           type="button"
           className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
           title={title}
-          aria-pressed={active}
+          aria-pressed={onSelect ? active : undefined}
           onClick={(event) => {
             event.stopPropagation();
-            onSelect();
+            onSelect?.();
+          }}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            onDoubleClick?.();
           }}
         >
           {leading}

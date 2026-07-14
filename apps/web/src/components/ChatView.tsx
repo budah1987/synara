@@ -158,6 +158,7 @@ import {
   warningIdsForAcknowledgedRisks,
 } from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
+import { archiveThreadFromClient, unarchiveThreadFromClient } from "../lib/threadArchive";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -225,6 +226,7 @@ import {
   hasActionableProposedPlan,
   hasLiveTurnTailWork,
   isLatestTurnSettled,
+  isThreadRunningTurn,
   type ActiveTaskListState,
 } from "../session-logic";
 import {
@@ -1829,7 +1831,10 @@ export default function ChatView({
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
-  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameThreadTarget, setRenameThreadTarget] = useState<{
+    threadId: ThreadId;
+    title: string;
+  } | null>(null);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
     homeDir,
     chatWorkspaceRoot,
@@ -5308,7 +5313,7 @@ export default function ChatView({
 
   useEffect(() => {
     setPullRequestDialogState(null);
-    setRenameDialogOpen(false);
+    setRenameThreadTarget((current) => (current?.threadId === activeThread?.id ? current : null));
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
@@ -10088,6 +10093,79 @@ export default function ChatView({
     },
     [onNavigateToThread, storeOpenChatThreadPage],
   );
+  const onCloseWorkspaceChat = useCallback(
+    async (closingThreadId: ThreadId, nextThreadId: ThreadId | null) => {
+      const closingThread = getThreadFromState(useStore.getState(), closingThreadId);
+      if (!closingThread) return;
+      if (isThreadRunningTurn(closingThread)) {
+        toastManager.add({
+          type: "error",
+          title: "Cannot close chat",
+          description: "Stop the running session before closing this chat.",
+        });
+        return;
+      }
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close chat",
+          description: "Reconnect to the server and try again.",
+        });
+        return;
+      }
+
+      const wasActive = closingThreadId === activeThread?.id;
+      try {
+        await archiveThreadFromClient(api.orchestration, closingThreadId);
+        if (wasActive) {
+          if (nextThreadId) {
+            onOpenEditorChat(nextThreadId);
+          } else {
+            await onNewWorkspaceChat();
+          }
+        }
+        toastManager.add({
+          id: `archive-undo:${closingThreadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: 8000,
+            archiveUndo: {
+              onUndo: async () => {
+                try {
+                  await unarchiveThreadFromClient(api.orchestration, closingThreadId);
+                  if (wasActive) {
+                    onNavigateToThread(closingThreadId);
+                  }
+                  return true;
+                } catch (error) {
+                  toastManager.add({
+                    type: "error",
+                    title: "Could not restore chat",
+                    description:
+                      error instanceof Error ? error.message : "Unable to restore the chat.",
+                  });
+                  return false;
+                }
+              },
+              onViewArchived: () => {
+                void navigate({ to: "/settings", search: { section: "archived" } });
+              },
+            },
+          },
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close chat",
+          description: error instanceof Error ? error.message : "Unable to archive the chat.",
+        });
+      }
+    },
+    [activeThread?.id, navigate, onNavigateToThread, onNewWorkspaceChat, onOpenEditorChat],
+  );
   const onOpenEditorTerminal = useCallback(() => {
     if (!activeThreadId) return;
     setTerminalPresentationMode("workspace");
@@ -10193,12 +10271,16 @@ export default function ChatView({
     isEmpty: timelineEntries.length === 0,
   });
 
-  const handleRenameActiveThread = async (newTitle: string) => {
+  const handleRenameThread = async (newTitle: string) => {
+    if (!renameThreadTarget) return;
+    const targetThread = getThreadFromState(useStore.getState(), renameThreadTarget.threadId);
+    const renamingActiveLocalDraft =
+      renameThreadTarget.threadId === activeThread.id && isLocalDraftThread;
     const outcome = await dispatchThreadRename({
-      threadId: activeThread.id,
+      threadId: renameThreadTarget.threadId,
       newTitle,
-      unchangedTitles: [activeThread.title],
-      createIfMissing: isLocalDraftThread
+      unchangedTitles: [renameThreadTarget.title, ...(targetThread ? [targetThread.title] : [])],
+      createIfMissing: renamingActiveLocalDraft
         ? {
             projectId: activeThread.projectId,
             modelSelection: activeThread.modelSelection,
@@ -10232,6 +10314,7 @@ export default function ChatView({
     if (outcome === "unchanged" || outcome === "unavailable") {
       return;
     }
+    setRenameThreadTarget(null);
   };
 
   const runtimeUsageControlsProps = {
@@ -11061,6 +11144,10 @@ export default function ChatView({
                   onOpenChat: onOpenEditorChat,
                   onOpenTerminal: onOpenEditorTerminal,
                   onCloseTerminal: onCloseEditorTerminal,
+                  onRenameChat: (targetThreadId, title) =>
+                    setRenameThreadTarget({ threadId: targetThreadId, title }),
+                  onCloseChat: (targetThreadId, nextThreadId) =>
+                    void onCloseWorkspaceChat(targetThreadId, nextThreadId),
                 }
               : null
           }
@@ -11079,16 +11166,20 @@ export default function ChatView({
           onToggleDiff={onToggleDiff}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
-          onRenameThread={() => setRenameDialogOpen(true)}
+          onRenameThread={() =>
+            setRenameThreadTarget({ threadId: activeThread.id, title: activeThread.title })
+          }
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
         />
       </header>
 
       <RenameThreadDialog
-        open={renameDialogOpen}
-        currentTitle={activeThread.title}
-        onOpenChange={setRenameDialogOpen}
-        onSave={handleRenameActiveThread}
+        open={renameThreadTarget !== null}
+        currentTitle={renameThreadTarget?.title ?? ""}
+        onOpenChange={(open) => {
+          if (!open) setRenameThreadTarget(null);
+        }}
+        onSave={handleRenameThread}
       />
       {automationDraftForm ? (
         <AutomationDialog

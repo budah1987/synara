@@ -64,6 +64,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { readNativeApi } from "../../nativeApi";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -133,6 +134,8 @@ interface ChatHeaderProps {
     onOpenChat: (threadId: ThreadId) => void;
     onOpenTerminal: () => void;
     onCloseTerminal: () => void;
+    onRenameChat: (threadId: ThreadId, title: string) => void;
+    onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
   } | null;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
@@ -265,6 +268,8 @@ function EditorRailTabs(props: {
   onOpenChat: (threadId: ThreadId) => void;
   onOpenTerminal: () => void;
   onCloseTerminal: () => void;
+  onRenameChat: (threadId: ThreadId, title: string) => void;
+  onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
@@ -404,6 +409,10 @@ function EditorRailTabs(props: {
   const closeChatTab = (threadId: ThreadId) => {
     const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
     const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
+    if (props.workspaceId !== null) {
+      props.onCloseChat(threadId, closingActiveChat ? (nextChatTab?.id ?? null) : null);
+      return;
+    }
     setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
     if (!closingActiveChat) {
       return;
@@ -415,6 +424,30 @@ function EditorRailTabs(props: {
     if (terminalTabVisible) {
       openTerminalTab();
     }
+  };
+  const openChatTabContextMenu = (
+    event: React.MouseEvent<HTMLDivElement>,
+    thread: EditorRailChatTab,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const api = readNativeApi();
+    if (!api) return;
+
+    void (async () => {
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "rename", label: "Rename chat" },
+          { id: "close", label: "Close chat", separatorBefore: true },
+        ],
+        { x: event.clientX, y: event.clientY },
+      );
+      if (clicked === "rename") {
+        props.onRenameChat(thread.id, thread.title);
+      } else if (clicked === "close") {
+        closeChatTab(thread.id);
+      }
+    })();
   };
 
   return (
@@ -462,12 +495,12 @@ function EditorRailTabs(props: {
         // app reads identically. Pushed to the header's right edge (ml-auto) so the
         // title and new/history controls stay grouped on the left.
         <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {chatTabs.map((thread, index) => (
+          {chatTabs.map((thread) => (
             <SurfaceTabChip
               key={thread.id}
               active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
-              title={thread.title}
-              label={`Chat ${index + 1}`}
+              title={`${thread.title} — double-click to rename`}
+              label={thread.title}
               labelClassName="max-w-24"
               icon={
                 <ProviderIcon
@@ -476,9 +509,11 @@ function EditorRailTabs(props: {
                   className="size-3 shrink-0"
                 />
               }
-              closeLabel={props.workspaceId === null ? `Close ${thread.title}` : undefined}
+              closeLabel={`Close ${thread.title}`}
               onSelect={() => openChatTab(thread.id)}
-              onClose={props.workspaceId === null ? () => closeChatTab(thread.id) : undefined}
+              onClose={() => closeChatTab(thread.id)}
+              onDoubleClick={() => props.onRenameChat(thread.id, thread.title)}
+              onContextMenu={(event) => openChatTabContextMenu(event, thread)}
             />
           ))}
           {terminalTabVisible ? (
@@ -756,6 +791,8 @@ export const ChatHeader = memo(function ChatHeader({
                   onOpenChat={editorChatControls.onOpenChat}
                   onOpenTerminal={editorChatControls.onOpenTerminal}
                   onCloseTerminal={editorChatControls.onCloseTerminal}
+                  onRenameChat={editorChatControls.onRenameChat}
+                  onCloseChat={editorChatControls.onCloseChat}
                   onNavigateToThread={onNavigateToThread}
                 />
               ) : null}
