@@ -16,17 +16,19 @@ describe("SurfaceTabChip", () => {
         label="Seller Catalog"
         closeLabel="Close Seller Catalog"
         closePlacement="trailing"
+        renameLabel="Rename Seller Catalog"
         onSelect={() => undefined}
         onClose={() => undefined}
-        onDoubleClick={() => undefined}
+        onRename={() => undefined}
       />,
     );
 
     expect(markup).toContain('<span data-testid="identity">AI</span>');
+    expect(markup).toContain('aria-label="Rename Seller Catalog"');
     expect(markup).toContain('aria-label="Close Seller Catalog"');
-    expect(markup.indexOf('data-testid="identity"')).toBeLessThan(
+    expect(markup.indexOf('aria-label="Rename Seller Catalog"')).toBeLessThan(
       markup.indexOf('aria-label="Close Seller Catalog"'),
     );
-    expect(markup.match(/<button/g)).toHaveLength(2);
+    expect(markup.match(/<button/g)).toHaveLength(3);
   });
 });

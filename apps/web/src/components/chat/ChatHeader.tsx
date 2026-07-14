@@ -499,7 +499,7 @@ function EditorRailTabs(props: {
             <SurfaceTabChip
               key={thread.id}
               active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
-              title={`${thread.title} — double-click to rename`}
+              title={thread.title}
               label={thread.title}
               labelClassName="max-w-24"
               icon={
@@ -511,9 +511,10 @@ function EditorRailTabs(props: {
               }
               closeLabel={`Close ${thread.title}`}
               closePlacement="trailing"
+              renameLabel={`Rename ${thread.title}`}
               onSelect={() => openChatTab(thread.id)}
               onClose={() => closeChatTab(thread.id)}
-              onDoubleClick={() => props.onRenameChat(thread.id, thread.title)}
+              onRename={() => props.onRenameChat(thread.id, thread.title)}
               onContextMenu={(event) => openChatTabContextMenu(event, thread)}
             />
           ))}

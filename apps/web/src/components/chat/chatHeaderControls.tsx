@@ -171,9 +171,9 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
 
-/** Dedicated trailing close control for tabs whose identity glyph must remain stable.
- *  Its footprint is always reserved so revealing it never shifts the tab label. */
-export const DOCK_TAB_TRAILING_CLOSE_CLASS_NAME =
+/** Dedicated trailing tab action whose footprint is always reserved so revealing
+ *  Rename or Close never shifts the tab label. */
+export const DOCK_TAB_TRAILING_ACTION_CLASS_NAME =
   "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-foreground-secondary)] opacity-0 transition-[color,background-color,opacity] group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] focus-visible:opacity-100";
 
 /**
@@ -183,8 +183,8 @@ export const DOCK_TAB_TRAILING_CLOSE_CLASS_NAME =
  * chip fades that glyph out and reveals a circular close affordance by default, but
  * only when an {@link onClose} handler is supplied (tabs that can't be closed render
  * a static icon slot instead). `closePlacement="trailing"` keeps the identity glyph
- * stable and gives Close a separate trailing hit target, which is required when the
- * label also has a double-click gesture such as Rename.
+ * stable and gives Close a separate trailing hit target. Rename also renders as an
+ * independent trailing action, so it never inherits the label's selection behavior.
  *
  * The icon→close-X reveal is driven entirely by the `group/dock-tab` named group
  * the chip declares here, so the hover wiring lives in exactly one place. Call
@@ -206,9 +206,10 @@ export function SurfaceTabChip({
   labelClassName,
   closeLabel,
   closePlacement = "leading-swap",
+  renameLabel,
   onSelect,
   onClose,
-  onDoubleClick,
+  onRename,
   onContextMenu,
 }: {
   icon: ReactNode;
@@ -221,9 +222,10 @@ export function SurfaceTabChip({
   labelClassName?: string | undefined;
   closeLabel?: string | undefined;
   closePlacement?: "leading-swap" | "trailing" | undefined;
+  renameLabel?: string | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
-  onDoubleClick?: (() => void) | undefined;
+  onRename?: (() => void) | undefined;
   onContextMenu?: MouseEventHandler<HTMLDivElement> | undefined;
 }) {
   return (
@@ -257,19 +259,15 @@ export function SurfaceTabChip({
       ) : (
         <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
       )}
-      {onSelect || onDoubleClick ? (
+      {onSelect ? (
         <button
           type="button"
           className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
           title={title}
-          aria-pressed={onSelect ? active : undefined}
+          aria-pressed={active}
           onClick={(event) => {
             event.stopPropagation();
-            onSelect?.();
-          }}
-          onDoubleClick={(event) => {
-            event.stopPropagation();
-            onDoubleClick?.();
+            onSelect();
           }}
         >
           {leading}
@@ -289,10 +287,24 @@ export function SurfaceTabChip({
           {trailing}
         </span>
       )}
+      {onRename ? (
+        <button
+          type="button"
+          className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
+          aria-label={renameLabel}
+          title={renameLabel}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRename();
+          }}
+        >
+          <CentralIcon name="pencil" className="size-3 shrink-0" />
+        </button>
+      ) : null}
       {onClose && closePlacement === "trailing" ? (
         <button
           type="button"
-          className={DOCK_TAB_TRAILING_CLOSE_CLASS_NAME}
+          className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
           aria-label={closeLabel}
           title={closeLabel}
           onClick={(event) => {
