@@ -191,6 +191,7 @@ import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
+import { WorktreeWorkspaceHoverCardContent } from "./WorktreeWorkspaceHoverCardContent";
 import {
   SIDEBAR_HOVER_CARD_POPUP_PROPS,
   SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
@@ -6289,7 +6290,7 @@ export default function Sidebar() {
                                 render={
                                   <button
                                     type="button"
-                                    className="flex min-w-0 flex-1 items-center gap-2 pr-12 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    className="flex min-w-0 flex-1 items-center gap-2 pr-2 text-left outline-none group-hover/workspace-row:pr-16 group-focus-within/workspace-row:pr-16 focus-visible:ring-2 focus-visible:ring-ring"
                                     disabled={!firstThread}
                                     onClick={() => {
                                       if (!firstThread) return;
@@ -6310,7 +6311,7 @@ export default function Sidebar() {
                                     }
                                   >
                                     <WorktreeIcon className="size-3.5 shrink-0 text-muted-foreground/85" />
-                                    <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">
+                                    <span className="min-w-0 flex-1 truncate font-normal text-foreground/90">
                                       {workspace.title}
                                     </span>
                                     {workspace.state !== "ready" ? (
@@ -6329,59 +6330,28 @@ export default function Sidebar() {
                               />
                               <PreviewCardPopup
                                 {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
-                                className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "p-2")}
+                                className={SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME}
                               >
-                                <div className="grid gap-2 py-0.5 text-xs">
-                                  <div className="font-medium text-foreground">
-                                    {workspace.title}
-                                  </div>
-                                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-muted-foreground">
-                                    <dt>Branch</dt>
-                                    <dd className="truncate text-foreground/85">
-                                      {branchUrl && workspace.branch ? (
-                                        <a
-                                          href={branchUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="inline-flex max-w-full items-center gap-1 rounded-sm font-medium text-foreground underline decoration-foreground/30 underline-offset-2 transition-colors hover:decoration-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                          aria-label={`Open ${workspace.branch} on GitHub`}
-                                          onClick={(event) =>
-                                            openWorkspaceBranchLink(event, branchUrl)
-                                          }
-                                        >
-                                          <span className="truncate">{workspace.branch}</span>
-                                          <ExternalLinkIcon className="size-3 shrink-0 opacity-65" />
-                                        </a>
-                                      ) : (
-                                        (workspace.branch ?? "Waiting for worktree")
-                                      )}
-                                    </dd>
-                                    <dt>Path</dt>
-                                    <dd className="truncate text-foreground/85">
-                                      {workspace.path
-                                        ? formatWorktreePathForDisplay(workspace.path)
-                                        : "Not created yet"}
-                                    </dd>
-                                    <dt>Created from</dt>
-                                    <dd className="truncate text-foreground/85">
-                                      {workspace.sourceRef ?? workspace.targetRef}
-                                    </dd>
-                                    <dt>Status</dt>
-                                    <dd className="capitalize text-foreground/85">
-                                      {workspace.state.replaceAll("-", " ")}
-                                    </dd>
-                                  </dl>
-                                  <p className="text-muted-foreground/75">
-                                    {workspaceThreads.length}{" "}
-                                    {pluralize(workspaceThreads.length, "conversation")}
-                                  </p>
-                                </div>
+                                <WorktreeWorkspaceHoverCardContent
+                                  title={workspace.title}
+                                  branch={workspace.branch}
+                                  branchUrl={branchUrl}
+                                  path={
+                                    workspace.path
+                                      ? formatWorktreePathForDisplay(workspace.path)
+                                      : null
+                                  }
+                                  source={workspace.sourceRef ?? workspace.targetRef}
+                                  status={workspace.state}
+                                  openConversationCount={workspaceThreads.length}
+                                  onOpenBranch={openWorkspaceBranchLink}
+                                />
                               </PreviewCardPopup>
                             </PreviewCard>
-                            <div className="absolute right-1 flex items-center gap-0.5 rounded-md bg-[var(--sidebar-accent)] pl-1 opacity-0 transition-opacity duration-150 group-hover/workspace-row:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
+                            <div className="pointer-events-none absolute right-1 flex items-center gap-0.5 rounded-md bg-[var(--sidebar-accent)] pl-1 opacity-0 transition-opacity duration-150 group-hover/workspace-row:pointer-events-auto group-hover/workspace-row:opacity-100 group-focus-within/workspace-row:pointer-events-auto group-focus-within/workspace-row:opacity-100 motion-reduce:transition-none">
                               <button
                                 type="button"
-                                className="sidebar-icon-button inline-flex size-5 items-center justify-center rounded-md"
+                                className="sidebar-icon-button inline-flex size-6 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                 aria-label={`Rename ${workspace.title}`}
                                 title="Rename workspace"
                                 onClick={() => setRenamingWorktreeWorkspaceId(workspace.id)}
@@ -6390,7 +6360,7 @@ export default function Sidebar() {
                               </button>
                               <button
                                 type="button"
-                                className="sidebar-icon-button inline-flex size-5 items-center justify-center rounded-md"
+                                className="sidebar-icon-button inline-flex size-6 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                 aria-label={`New conversation in ${workspace.title}`}
                                 title="New conversation"
                                 onClick={() =>

@@ -153,7 +153,7 @@ export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
  *  touch more breathing room than the symmetric chip base. */
 export const DOCK_TAB_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
-  "inline-flex min-w-0 items-center pr-2.5",
+  "inline-flex min-w-0 items-center gap-1 pr-2 focus-within:bg-[var(--color-background-button-secondary-hover)] focus-within:text-[var(--color-text-foreground)] motion-reduce:transition-none",
 );
 
 /** Icon slot for dock tabs — bare larger icon at rest; on hover a circular disc + X appears.
@@ -174,7 +174,7 @@ export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
 /** Dedicated trailing tab action whose footprint is always reserved so revealing
  *  Rename or Close never shifts the tab label. */
 export const DOCK_TAB_TRAILING_ACTION_CLASS_NAME =
-  "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-foreground-secondary)] opacity-0 transition-[color,background-color,opacity] group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] focus-visible:opacity-100";
+  "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full text-[var(--color-text-foreground-secondary)] opacity-0 transition-[color,background-color,opacity] duration-150 group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring motion-reduce:transition-none";
 
 /**
  * Shared flat tab chip for every chat surface that renders a row of closable tabs —
@@ -272,9 +272,13 @@ export const SurfaceTabChip = forwardRef<HTMLDivElement, SurfaceTabChipProps>(
         {onSelect ? (
           <button
             type="button"
-            className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+            className={cn(
+              "flex min-w-0 items-center gap-1.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              labelClassName,
+            )}
             title={title}
             aria-pressed={active}
+            aria-current={active ? "page" : undefined}
             onClick={(event) => {
               event.stopPropagation();
               onSelect();

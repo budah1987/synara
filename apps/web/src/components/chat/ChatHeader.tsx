@@ -590,7 +590,7 @@ function EditorRailTabs(props: {
                     active={active}
                     title={thread.title}
                     label={thread.title}
-                    labelClassName="max-w-[clamp(4.5rem,20cqi,8rem)]"
+                    labelClassName="max-w-[clamp(3.75rem,18cqi,8.5rem)]"
                     icon={
                       <ProviderIcon
                         provider={thread.provider}
@@ -614,7 +614,7 @@ function EditorRailTabs(props: {
                   active={props.activeSurface === "terminal"}
                   title="Terminal"
                   label="Terminal"
-                  labelClassName="max-w-[clamp(4.5rem,20cqi,8rem)]"
+                  labelClassName="max-w-[clamp(3.75rem,18cqi,8.5rem)]"
                   icon={
                     <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />
                   }
