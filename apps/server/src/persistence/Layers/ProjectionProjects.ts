@@ -44,6 +44,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json,
           scripts_json,
           is_pinned,
+          repository_identity,
+          default_target_ref,
           created_at,
           updated_at,
           deleted_at
@@ -56,6 +58,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.defaultModelSelection !== null ? JSON.stringify(row.defaultModelSelection) : null},
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
+          ${row.repositoryIdentity ?? null},
+          ${row.defaultTargetRef ?? null},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -68,6 +72,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json = excluded.default_model_selection_json,
           scripts_json = excluded.scripts_json,
           is_pinned = excluded.is_pinned,
+          repository_identity = excluded.repository_identity,
+          default_target_ref = excluded.default_target_ref,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -87,6 +93,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          repository_identity AS "repositoryIdentity",
+          default_target_ref AS "defaultTargetRef",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -108,6 +116,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           default_model_selection_json AS "defaultModelSelection",
           scripts_json AS "scripts",
           is_pinned AS "isPinned",
+          repository_identity AS "repositoryIdentity",
+          default_target_ref AS "defaultTargetRef",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

@@ -17,6 +17,7 @@ import {
   OrchestrationEvent,
   OrchestrationImportThreadInput,
   OrchestrationShellStreamItem,
+  OrchestrationWorkspaceShellStreamItem,
   OrchestrationSubscribeShellInput,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
@@ -439,6 +440,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.projectDevServerEvent]: typeof ProjectDevServerEvent.Type;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
   readonly [ORCHESTRATION_WS_CHANNELS.shellEvent]: OrchestrationShellStreamItem;
+  readonly [ORCHESTRATION_WS_CHANNELS.workspaceShellEvent]: OrchestrationWorkspaceShellStreamItem;
   readonly [ORCHESTRATION_WS_CHANNELS.threadEvent]: OrchestrationThreadStreamItem;
 }
 
@@ -498,6 +500,10 @@ export const WsPushOrchestrationThreadEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.threadEvent,
   OrchestrationThreadStreamItem,
 );
+export const WsPushOrchestrationWorkspaceShellEvent = makeWsPushSchema(
+  ORCHESTRATION_WS_CHANNELS.workspaceShellEvent,
+  OrchestrationWorkspaceShellStreamItem,
+);
 
 export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.gitActionProgress,
@@ -511,6 +517,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.projectDevServerEvent,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   ORCHESTRATION_WS_CHANNELS.shellEvent,
+  ORCHESTRATION_WS_CHANNELS.workspaceShellEvent,
   ORCHESTRATION_WS_CHANNELS.threadEvent,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
@@ -527,6 +534,7 @@ export const WsPush = Schema.Union([
   WsPushProjectDevServerEvent,
   WsPushOrchestrationDomainEvent,
   WsPushOrchestrationShellEvent,
+  WsPushOrchestrationWorkspaceShellEvent,
   WsPushOrchestrationThreadEvent,
 ]);
 export type WsPush = typeof WsPush.Type;

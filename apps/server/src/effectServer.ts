@@ -20,6 +20,7 @@ import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import { WorktreeWorkspaceReactor } from "./orchestration/Services/WorktreeWorkspaceReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
@@ -45,6 +46,7 @@ export interface ServerShape {
     | ServerLifecycleEvents
     | OrchestrationEngineService
     | OrchestrationReactor
+    | WorktreeWorkspaceReactor
     | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ServerRuntimeStartup
@@ -73,6 +75,7 @@ export const createEffectServer = Effect.fn(function* () {
   const keybindings = yield* Keybindings;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationReactor = yield* OrchestrationReactor;
+  const worktreeWorkspaceReactor = yield* WorktreeWorkspaceReactor;
   const providerSessionReaper = yield* ProviderSessionReaper;
   const runtimeStartup = yield* ServerRuntimeStartup;
   const serverSettings = yield* ServerSettingsService;
@@ -132,6 +135,7 @@ export const createEffectServer = Effect.fn(function* () {
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Scope.provide(worktreeWorkspaceReactor.start, subscriptionsScope);
   yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);

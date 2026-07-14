@@ -87,6 +87,7 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
+  OrchestrationWorkspaceShellStreamItem,
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
@@ -212,6 +213,24 @@ export const WsOrchestrationGetShellSnapshotRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetCapabilitiesRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getCapabilities,
+  {
+    payload: OrchestrationRpcSchemas.getCapabilities.input,
+    success: OrchestrationRpcSchemas.getCapabilities.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationGetWorkspaceShellSnapshotRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot,
+  {
+    payload: OrchestrationRpcSchemas.getWorkspaceShellSnapshot.input,
+    success: OrchestrationRpcSchemas.getWorkspaceShellSnapshot.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationRepairStateRpc = Rpc.make(ORCHESTRATION_WS_METHODS.repairState, {
   payload: OrchestrationRpcSchemas.repairState.input,
   success: OrchestrationRpcSchemas.repairState.output,
@@ -250,6 +269,34 @@ export const WsOrchestrationUnsubscribeShellRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.unsubscribeShell,
   {
     payload: OrchestrationRpcSchemas.unsubscribeShell.input,
+    success: Schema.Void,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationReplayWorkspaceEventsRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.replayWorkspaceEvents,
+  {
+    payload: OrchestrationRpcSchemas.replayWorkspaceEvents.input,
+    success: OrchestrationRpcSchemas.replayWorkspaceEvents.output,
+    error: WsRpcError,
+  },
+);
+
+export const WsOrchestrationSubscribeWorkspaceShellRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell,
+  {
+    payload: OrchestrationRpcSchemas.subscribeWorkspaceShell.input,
+    success: OrchestrationWorkspaceShellStreamItem,
+    error: WsRpcError,
+    stream: true,
+  },
+);
+
+export const WsOrchestrationUnsubscribeWorkspaceShellRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell,
+  {
+    payload: OrchestrationRpcSchemas.unsubscribeWorkspaceShell.input,
     success: Schema.Void,
     error: WsRpcError,
   },
@@ -874,12 +921,17 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
+  WsOrchestrationGetCapabilitiesRpc,
+  WsOrchestrationGetWorkspaceShellSnapshotRpc,
   WsOrchestrationRepairStateRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,
+  WsOrchestrationReplayWorkspaceEventsRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationUnsubscribeShellRpc,
+  WsOrchestrationSubscribeWorkspaceShellRpc,
+  WsOrchestrationUnsubscribeWorkspaceShellRpc,
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,

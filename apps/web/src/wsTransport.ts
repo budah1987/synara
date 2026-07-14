@@ -14,6 +14,7 @@ import {
   type GitRunStackedActionResult,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationWorkspaceShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerConfigStreamEvent,
@@ -146,6 +147,7 @@ export class WsTransport {
   private readonly streamCleanups = new Map<string, () => void>();
   private readonly stoppingStreams = new Set<string>();
   private shellSubscribed = false;
+  private workspaceShellSubscribed = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
 
   constructor(url?: string) {
@@ -176,6 +178,16 @@ export class WsTransport {
     if (method === ORCHESTRATION_WS_METHODS.unsubscribeShell) {
       this.shellSubscribed = false;
       this.stopStream("orchestration.shell");
+      return undefined as T;
+    }
+    if (method === ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell) {
+      this.workspaceShellSubscribed = true;
+      this.startWorkspaceShellStream(session);
+      return undefined as T;
+    }
+    if (method === ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell) {
+      this.workspaceShellSubscribed = false;
+      this.stopStream("orchestration.workspace-shell");
       return undefined as T;
     }
     if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
@@ -375,6 +387,9 @@ export class WsTransport {
     if (this.shellSubscribed) {
       this.startShellStream(handle);
     }
+    if (this.workspaceShellSubscribed) {
+      this.startWorkspaceShellStream(client);
+    }
     for (const [threadId, input] of this.threadSubscriptions) {
       this.startThreadStream(handle, threadId, input);
     }
@@ -541,6 +556,24 @@ export class WsTransport {
       session.client[ORCHESTRATION_WS_METHODS.subscribeShell]({}),
       (event: OrchestrationShellStreamItem) =>
         this.emit(ORCHESTRATION_WS_CHANNELS.shellEvent, event),
+      restartShell,
+    );
+  }
+
+  private startWorkspaceShellStream(session: SessionHandle): void {
+    const restartShell = () => {
+      void this.getSession()
+        .then((nextSession) => this.startWorkspaceShellStream(nextSession))
+        .catch((error) =>
+          console.warn("WebSocket RPC workspace shell stream failed to restart", error),
+        );
+    };
+    this.startStream(
+      session,
+      "orchestration.workspace-shell",
+      session.client[ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell]({}),
+      (event: OrchestrationWorkspaceShellStreamItem) =>
+        this.emit(ORCHESTRATION_WS_CHANNELS.workspaceShellEvent, event),
       restartShell,
     );
   }

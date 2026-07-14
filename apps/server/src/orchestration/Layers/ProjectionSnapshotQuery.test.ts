@@ -302,12 +302,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updatedAt: "2026-02-24T00:00:01.000Z",
           deletedAt: null,
           isPinned: false,
+          repositoryIdentity: null,
+          defaultTargetRef: null,
         },
       ]);
       assert.deepEqual(snapshot.threads, [
         {
           id: ThreadId.makeUnsafe("thread-1"),
           projectId: asProjectId("project-1"),
+          workspaceId: null,
           title: "Thread 1",
           modelSelection: {
             provider: "codex",

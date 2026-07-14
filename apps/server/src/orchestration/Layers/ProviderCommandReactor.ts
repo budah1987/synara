@@ -42,7 +42,6 @@ import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
-  resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
@@ -72,6 +71,7 @@ import {
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
 import { StudioOutputReactor } from "../Services/StudioOutputReactor.ts";
+import { resolveWorkspaceExecutionCwd } from "../worktreeWorkspaceExecution.ts";
 
 type ProviderIntentEvent = Extract<
   OrchestrationEvent,
@@ -329,15 +329,24 @@ const make = Effect.gen(function* () {
   });
 
   const resolveProjectedThreadWorkspaceCwd = Effect.fnUntraced(function* (
-    thread: Pick<OrchestrationThread, "projectId" | "envMode" | "worktreePath">,
+    thread: Pick<OrchestrationThread, "projectId" | "workspaceId" | "envMode" | "worktreePath">,
   ): Effect.fn.Return<string | undefined> {
     const project = yield* resolveThreadWorkspaceProject(thread);
     if (!project) {
       return undefined;
     }
-    return resolveThreadWorkspaceCwd({
+    const workspace =
+      thread.workspaceId != null && projectionSnapshotQuery.getWorkspaceShellSnapshot
+        ? (yield* projectionSnapshotQuery
+            .getWorkspaceShellSnapshot()
+            .pipe(Effect.catch(() => Effect.succeed(null))))?.workspaces.find(
+            (candidate) => candidate.id === thread.workspaceId,
+          )
+        : undefined;
+    return resolveWorkspaceExecutionCwd({
       thread,
-      projects: [project],
+      project,
+      workspace,
     });
   });
   const queuedTurnStartsByThread = new Map<

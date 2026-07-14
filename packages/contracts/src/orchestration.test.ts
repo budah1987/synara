@@ -13,6 +13,8 @@ import {
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
   OrchestrationReadModel,
+  OrchestrationShellSnapshot,
+  OrchestrationWorkspaceShellSnapshot,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -892,5 +894,105 @@ it.effect("preserves user-input answer values through the RPC JSON codec", () =>
         skipped: null,
       },
     );
+  }),
+);
+
+it.effect("keeps V1 shell payloads unchanged while V2 exposes workspace identity", () =>
+  Effect.gen(function* () {
+    const now = "2026-07-13T00:00:00.000Z";
+    const project = {
+      id: "project-1",
+      kind: "project",
+      title: "Project one",
+      workspaceRoot: "/tmp/project-1",
+      defaultModelSelection: null,
+      scripts: [],
+      isPinned: false,
+      repositoryIdentity: "repository-1",
+      defaultTargetRef: "main",
+      createdAt: now,
+      updatedAt: now,
+    };
+    const thread = {
+      id: "thread-1",
+      projectId: "project-1",
+      workspaceId: "workspace-1",
+      title: "Conversation one",
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      envMode: "worktree",
+      branch: "synara/workspace-1",
+      worktreePath: "/tmp/workspace-1",
+      associatedWorktreePath: "/tmp/workspace-1",
+      associatedWorktreeBranch: "synara/workspace-1",
+      associatedWorktreeRef: "abc123",
+      createBranchFlowCompleted: true,
+      isPinned: false,
+      parentThreadId: null,
+      subagentAgentId: null,
+      subagentNickname: null,
+      subagentRole: null,
+      forkSourceThreadId: null,
+      sidechatSourceThreadId: null,
+      lastKnownPr: null,
+      latestTurn: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      handoff: null,
+      session: null,
+    };
+    const workspace = {
+      id: "workspace-1",
+      projectId: "project-1",
+      repositoryIdentity: "repository-1",
+      kind: "managed",
+      state: "ready",
+      title: "Workspace one",
+      path: "/tmp/workspace-1",
+      branch: "synara/workspace-1",
+      headRef: "abc123",
+      targetRef: "main",
+      targetResolvedCommit: "abc123",
+      createdFromCommit: "abc123",
+      sourceKind: "new-branch",
+      sourceRef: null,
+      setupStatus: "succeeded",
+      setupError: null,
+      setupLogId: null,
+      lastKnownPr: null,
+      isPinned: false,
+      lifecycleGeneration: 1,
+      activeOperation: null,
+      lastFailure: null,
+      mutationRevision: 1,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      deletedAt: null,
+    };
+
+    const v1 = yield* Schema.encodeUnknownEffect(OrchestrationShellSnapshot)({
+      snapshotSequence: 1,
+      projects: [project],
+      threads: [thread],
+      updatedAt: now,
+    });
+    const v2 = yield* Schema.encodeUnknownEffect(OrchestrationWorkspaceShellSnapshot)({
+      protocolVersion: 2,
+      snapshotSequence: 1,
+      projects: [project],
+      workspaces: [workspace],
+      threads: [thread],
+      updatedAt: now,
+    });
+
+    assert.equal("repositoryIdentity" in v1.projects[0]!, false);
+    assert.equal("defaultTargetRef" in v1.projects[0]!, false);
+    assert.equal("workspaceId" in v1.threads[0]!, false);
+    assert.equal(v2.projects[0]?.repositoryIdentity, "repository-1");
+    assert.equal(v2.threads[0]?.workspaceId, "workspace-1");
+    assert.equal(v2.workspaces[0]?.id, "workspace-1");
   }),
 );

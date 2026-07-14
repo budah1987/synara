@@ -4,6 +4,8 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationWorkspaceShellStreamEvent,
+  type OrchestrationWorkspaceShellSnapshot,
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
@@ -111,6 +113,12 @@ const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
 const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
+
+function isWorkspaceShellSnapshot(
+  snapshot: OrchestrationShellSnapshot | OrchestrationWorkspaceShellSnapshot,
+): snapshot is OrchestrationWorkspaceShellSnapshot {
+  return "protocolVersion" in snapshot && snapshot.protocolVersion === 2;
+}
 
 type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 type ActiveProviderUpdateToast =
@@ -814,8 +822,12 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
 
 function EventRouter() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
+  const applyWorkspaceShellEvent = useStore((store) => store.applyWorkspaceShellEvent);
   const applyOrchestrationEventsHotPath = useStore(
     (store) => store.applyOrchestrationEventsHotPath,
   );
@@ -889,6 +901,8 @@ function EventRouter() {
     let providerDiscoveryInvalidationFingerprint: string | null = null;
     let shellSnapshotSequence = -1;
     let pendingShellEvents: OrchestrationShellStreamEvent[] = [];
+    let pendingWorkspaceShellEvents: OrchestrationWorkspaceShellStreamEvent[] = [];
+    let useWorkspaceV2 = false;
     const subscribedThreadIds = new Set<ThreadId>();
     const threadSnapshotSequenceById = new Map<ThreadId, number>();
     const pendingThreadEventsById = new Map<ThreadId, OrchestrationEvent[]>();
@@ -940,6 +954,17 @@ function EventRouter() {
       for (const event of nextPending) {
         shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
         applyShellEvent(event);
+      }
+    };
+
+    const flushWorkspaceShellBuffer = (snapshotSequence: number) => {
+      const nextPending = pendingWorkspaceShellEvents
+        .filter((event) => event.sequence > snapshotSequence)
+        .toSorted((left, right) => left.sequence - right.sequence);
+      pendingWorkspaceShellEvents = [];
+      for (const event of nextPending) {
+        shellSnapshotSequence = Math.max(shellSnapshotSequence, event.sequence);
+        applyWorkspaceShellEvent(event);
       }
     };
 
@@ -1008,25 +1033,47 @@ function EventRouter() {
     };
 
     const loadShellSnapshotOnce = async () => {
-      const snapshot = await api.orchestration.getShellSnapshot();
+      const snapshot = useWorkspaceV2
+        ? await api.orchestration.getWorkspaceShellSnapshot()
+        : await api.orchestration.getShellSnapshot();
       if (!shouldApplyBootstrapShellSnapshot(snapshot)) {
         return;
       }
       shellSnapshotSequence = snapshot.snapshotSequence;
-      syncServerShellSnapshot(snapshot);
+      if (isWorkspaceShellSnapshot(snapshot)) {
+        syncServerWorkspaceShellSnapshot(snapshot);
+      } else {
+        syncServerShellSnapshot(snapshot);
+      }
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
       removeOrphanedTerminalsForCurrentState();
-      flushShellBuffer(snapshot.snapshotSequence);
+      if (isWorkspaceShellSnapshot(snapshot)) {
+        flushWorkspaceShellBuffer(snapshot.snapshotSequence);
+      } else {
+        flushShellBuffer(snapshot.snapshotSequence);
+      }
     };
 
     const ensureScopedSubscriptions = async () => {
       shellSnapshotSequence = -1;
       pendingShellEvents = [];
+      pendingWorkspaceShellEvents = [];
       subscribedThreadIds.clear();
       threadSnapshotSequenceById.clear();
       pendingThreadEventsById.clear();
       threadReplayRequestInFlight.clear();
-      await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      useWorkspaceV2 = await api.orchestration
+        .getCapabilities()
+        .then(
+          (capabilities) =>
+            capabilities.worktreeWorkspacesV2 && capabilities.protocolVersions.includes(2),
+        )
+        .catch(() => false);
+      if (useWorkspaceV2) {
+        await api.orchestration.subscribeWorkspaceShell().catch(() => loadShellSnapshotOnce());
+      } else {
+        await api.orchestration.subscribeShell().catch(() => loadShellSnapshotOnce());
+      }
       await enqueueThreadSubscriptionReconcile(visibleThreadIdsRef.current);
     };
 
@@ -1215,6 +1262,39 @@ function EventRouter() {
       }
       shellSnapshotSequence = item.sequence;
       applyShellEvent(item);
+      if (item.kind === "thread-upserted") {
+        reconcilePromotedDraftsFromShellThreads([item.thread]);
+      }
+      if (
+        item.kind === "thread-upserted" &&
+        subscribedThreadIds.has(item.thread.id) &&
+        !threadSnapshotSequenceById.has(item.thread.id)
+      ) {
+        void requestThreadSnapshot(item.thread.id);
+      }
+      if (item.kind === "thread-upserted" && subscribedThreadIds.has(item.thread.id)) {
+        void replayThreadEvents(item.thread.id, item.sequence).catch(() => undefined);
+      }
+    });
+    const unsubWorkspaceShellEvent = api.orchestration.onWorkspaceShellEvent((item) => {
+      if (item.kind === "snapshot") {
+        shellSnapshotSequence = item.snapshot.snapshotSequence;
+        syncServerWorkspaceShellSnapshot(item.snapshot);
+        reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
+        removeOrphanedTerminalsForCurrentState();
+        flushWorkspaceShellBuffer(item.snapshot.snapshotSequence);
+        return;
+      }
+
+      if (shellSnapshotSequence < 0) {
+        appendBounded(pendingWorkspaceShellEvents, item, PENDING_SHELL_EVENT_BUFFER_LIMIT);
+        return;
+      }
+      if (item.sequence <= shellSnapshotSequence) {
+        return;
+      }
+      shellSnapshotSequence = item.sequence;
+      applyWorkspaceShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
       }
@@ -1461,6 +1541,7 @@ function EventRouter() {
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       void api.orchestration.unsubscribeShell().catch(() => undefined);
+      void api.orchestration.unsubscribeWorkspaceShell().catch(() => undefined);
       void Promise.all(
         [...subscribedThreadIds].map((threadId) =>
           api.orchestration.unsubscribeThread({ threadId }).catch(() => undefined),
@@ -1468,6 +1549,7 @@ function EventRouter() {
       );
       unsubscribeRetainedThreadIdChanges();
       unsubShellEvent();
+      unsubWorkspaceShellEvent();
       unsubThreadEvent();
       unsubTerminalEvent();
       unsubDevServerEvent();
@@ -1479,12 +1561,14 @@ function EventRouter() {
   }, [
     applyOrchestrationEventsHotPath,
     applyShellEvent,
+    applyWorkspaceShellEvent,
     navigate,
     queryClient,
     removeOrphanedTerminalStates,
     setProjectExpanded,
     setServerWorkspacePaths,
     syncServerShellSnapshot,
+    syncServerWorkspaceShellSnapshot,
     syncServerThreadDetailHotPath,
   ]);
 

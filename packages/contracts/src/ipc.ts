@@ -153,10 +153,13 @@ import type {
   OrchestrationImportThreadResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
+  OrchestrationGetCapabilitiesResult,
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
+  OrchestrationWorkspaceShellSnapshot,
+  OrchestrationWorkspaceShellStreamItem,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
@@ -644,8 +647,10 @@ export interface NativeApi {
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
   };
   orchestration: {
+    getCapabilities: () => Promise<OrchestrationGetCapabilitiesResult>;
     getSnapshot: () => Promise<OrchestrationReadModel>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
+    getWorkspaceShellSnapshot: () => Promise<OrchestrationWorkspaceShellSnapshot>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (
       input: OrchestrationImportThreadInput,
@@ -658,10 +663,15 @@ export interface NativeApi {
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
+    subscribeWorkspaceShell: () => Promise<void>;
+    unsubscribeWorkspaceShell: () => Promise<void>;
     subscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
     unsubscribeThread: (input: OrchestrationSubscribeThreadInput) => Promise<void>;
     onDomainEvent: (callback: (event: OrchestrationEvent) => void) => () => void;
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
+    onWorkspaceShellEvent: (
+      callback: (event: OrchestrationWorkspaceShellStreamItem) => void,
+    ) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
   };
   automation: {

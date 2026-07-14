@@ -36,6 +36,8 @@ import {
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  requireWorkspace,
+  requireWorkspaceAbsent,
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
@@ -325,6 +327,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           defaultModelSelection: command.defaultModelSelection ?? null,
           scripts: [],
           isPinned: command.isPinned,
+          repositoryIdentity: command.repositoryIdentity ?? null,
+          defaultTargetRef: command.defaultTargetRef ?? null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -382,6 +386,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
           ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
+          ...(command.repositoryIdentity !== undefined
+            ? { repositoryIdentity: command.repositoryIdentity }
+            : {}),
+          ...(command.defaultTargetRef !== undefined
+            ? { defaultTargetRef: command.defaultTargetRef }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -414,12 +424,124 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.create": {
-      yield* requireProject({
+    case "workspace.create": {
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
       });
+      if ((project.kind ?? "project") !== "project") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Only repository projects can own worktree workspaces.`,
+        });
+      }
+      yield* requireWorkspaceAbsent({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const workspaceEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.created",
+        payload: {
+          workspaceId: command.workspaceId,
+          projectId: command.projectId,
+          repositoryIdentity: project.repositoryIdentity ?? null,
+          kind: "managed",
+          state: "provisioning",
+          title: command.title,
+          path: null,
+          branch: null,
+          headRef: null,
+          targetRef: command.targetRef,
+          targetResolvedCommit: null,
+          createdFromCommit: null,
+          sourceKind: "new-branch",
+          sourceRef: command.sourceRef ?? command.targetRef,
+          setupStatus: "pending",
+          setupError: null,
+          setupLogId: null,
+          lastKnownPr: null,
+          isPinned: false,
+          lifecycleGeneration: 1,
+          activeOperation: {
+            id: command.operationId,
+            generation: 1,
+            kind: "provision",
+            stage: "intent-recorded",
+            startedAt: command.createdAt,
+          },
+          lastFailure: null,
+          mutationRevision: 0,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+          archivedAt: null,
+          deletedAt: null,
+        },
+      };
+      const threadEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          workspaceId: command.workspaceId,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          envMode: "worktree",
+          branch: null,
+          worktreePath: null,
+          associatedWorktreePath: null,
+          associatedWorktreeBranch: null,
+          associatedWorktreeRef: null,
+          createBranchFlowCompleted: false,
+          isPinned: false,
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
+          forkSourceThreadId: null,
+          sidechatSourceThreadId: null,
+          lastKnownPr: null,
+          handoff: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [workspaceEvent, threadEvent];
+    }
+
+    case "workspace.conversation.create": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (workspace.state === "archiving" || workspace.state === "archived") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${workspace.id}' cannot add conversations while ${workspace.state}.`,
+        });
+      }
       yield* requireThreadAbsent({
         readModel,
         command,
@@ -435,7 +557,229 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.created",
         payload: {
           threadId: command.threadId,
+          projectId: workspace.projectId,
+          workspaceId: workspace.id,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          envMode: workspace.kind === "repository-root" ? "local" : "worktree",
+          branch: workspace.branch,
+          worktreePath: workspace.path,
+          associatedWorktreePath: workspace.path,
+          associatedWorktreeBranch: workspace.branch,
+          associatedWorktreeRef: workspace.headRef,
+          createBranchFlowCompleted: workspace.state === "ready",
+          isPinned: false,
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
+          forkSourceThreadId: null,
+          sidechatSourceThreadId: null,
+          lastKnownPr: null,
+          handoff: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "workspace.import-legacy": {
+      yield* requireProject({ readModel, command, projectId: command.projectId });
+      yield* requireWorkspaceAbsent({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.created",
+        payload: {
+          workspaceId: command.workspaceId,
           projectId: command.projectId,
+          repositoryIdentity: command.repositoryIdentity,
+          kind: command.kind,
+          state: command.state,
+          title: command.title,
+          path: command.path,
+          branch: command.branch,
+          headRef: command.headRef,
+          targetRef: command.targetRef,
+          targetResolvedCommit: command.targetResolvedCommit,
+          createdFromCommit: command.createdFromCommit,
+          sourceKind: "imported",
+          sourceRef: command.headRef,
+          setupStatus: command.setupStatus,
+          setupError: null,
+          setupLogId: null,
+          lastKnownPr: null,
+          isPinned: false,
+          lifecycleGeneration: 0,
+          activeOperation: null,
+          lastFailure: null,
+          mutationRevision: 0,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+          archivedAt: command.state === "archived" ? command.createdAt : null,
+          deletedAt: null,
+        },
+      };
+    }
+
+    case "thread.workspace.assign": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (thread.projectId !== workspace.projectId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${thread.id}' and workspace '${workspace.id}' belong to different projects.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.workspace-assigned",
+        payload: {
+          threadId: command.threadId,
+          workspaceId: command.workspaceId,
+          projectId: workspace.projectId,
+          envMode: workspace.kind === "repository-root" ? "local" : "worktree",
+          branch: workspace.branch,
+          worktreePath: workspace.path,
+          updatedAt: command.updatedAt,
+        },
+      };
+    }
+
+    case "workspace.provision.complete": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (
+        workspace.activeOperation?.id !== command.operationId ||
+        workspace.activeOperation.generation !== command.generation
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale workspace completion for '${workspace.id}' was rejected.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.ready",
+        payload: {
+          workspaceId: command.workspaceId,
+          operationId: command.operationId,
+          generation: command.generation,
+          path: command.path,
+          branch: command.branch,
+          headRef: command.headRef,
+          targetResolvedCommit: command.targetResolvedCommit,
+          createdFromCommit: command.createdFromCommit,
+          setupStatus: command.setupStatus,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "workspace.operation.fail": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (
+        workspace.activeOperation?.id !== command.operationId ||
+        workspace.activeOperation.generation !== command.generation
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale workspace failure for '${workspace.id}' was rejected.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.failedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.operation-failed",
+        payload: {
+          workspaceId: command.workspaceId,
+          operationId: command.operationId,
+          generation: command.generation,
+          kind: command.kind,
+          stage: command.stage,
+          summary: command.summary,
+          logId: command.logId ?? null,
+          path: command.path ?? null,
+          branch: command.branch ?? null,
+          headRef: command.headRef ?? null,
+          targetResolvedCommit: command.targetResolvedCommit ?? null,
+          createdFromCommit: command.createdFromCommit ?? null,
+          failedAt: command.failedAt,
+        },
+      };
+    }
+
+    case "thread.create": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (command.workspaceId != null) {
+        const workspace = yield* requireWorkspace({
+          readModel,
+          command,
+          workspaceId: command.workspaceId,
+        });
+        if (workspace.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread and workspace project IDs must match.`,
+          });
+        }
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          workspaceId: command.workspaceId,
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -505,6 +849,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Source thread '${command.sourceThreadId}' must contain at least one native chat message after handoff before it can be handed off again.`,
         });
       }
+      const workspaceId = command.workspaceId ?? sourceThread.workspaceId ?? null;
+      if (workspaceId !== null) {
+        const workspace = yield* requireWorkspace({ readModel, command, workspaceId });
+        if (workspace.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Handoff workspace belongs to a different project.`,
+          });
+        }
+      }
 
       const createdEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
@@ -517,6 +871,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          workspaceId,
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -609,6 +964,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Source thread '${command.sourceThreadId}' belongs to a different project.`,
         });
       }
+      const workspaceId = command.workspaceId ?? sourceThread.workspaceId ?? null;
+      if (workspaceId !== null) {
+        const workspace = yield* requireWorkspace({ readModel, command, workspaceId });
+        if (workspace.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Fork workspace belongs to a different project.`,
+          });
+        }
+      }
 
       const createdEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
@@ -621,6 +986,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          workspaceId,
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -1111,6 +1477,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.workspaceId != null) {
+        const workspace = yield* requireWorkspace({
+          readModel,
+          command,
+          workspaceId: targetThread.workspaceId,
+        });
+        if (workspace.state !== "ready") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Workspace '${workspace.id}' is ${workspace.state}; provider turns require a ready workspace.`,
+          });
+        }
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

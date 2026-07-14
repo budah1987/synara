@@ -20,6 +20,7 @@ import {
   type GitActionProgressEvent,
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
+  type OrchestrationWorkspaceShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -74,6 +75,9 @@ const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) 
 const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
+const orchestrationWorkspaceShellEventListeners = new Set<
+  (payload: OrchestrationWorkspaceShellStreamItem) => void
+>();
 const orchestrationThreadEventListeners = new Set<
   (payload: OrchestrationThreadStreamItem) => void
 >();
@@ -434,6 +438,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(ORCHESTRATION_WS_CHANNELS.workspaceShellEvent, (message) => {
+    const payload = message.data;
+    for (const listener of orchestrationWorkspaceShellEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationThreadEventListeners) {
@@ -685,8 +699,11 @@ export function createWsNativeApi(): NativeApi {
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
     },
     orchestration: {
+      getCapabilities: () => transport.request(ORCHESTRATION_WS_METHODS.getCapabilities),
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
+      getWorkspaceShellSnapshot: () =>
+        transport.request(ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot),
       dispatchCommand: (command) => {
         return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),
@@ -704,6 +721,10 @@ export function createWsNativeApi(): NativeApi {
       subscribeShell: () => transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeShell, {}),
       unsubscribeShell: () =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeShell, {}),
+      subscribeWorkspaceShell: () =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell, {}),
+      unsubscribeWorkspaceShell: () =>
+        transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell, {}),
       subscribeThread: (input) =>
         transport.request<void>(ORCHESTRATION_WS_METHODS.subscribeThread, input),
       unsubscribeThread: (input) =>
@@ -718,6 +739,12 @@ export function createWsNativeApi(): NativeApi {
         orchestrationShellEventListeners.add(callback);
         return () => {
           orchestrationShellEventListeners.delete(callback);
+        };
+      },
+      onWorkspaceShellEvent: (callback) => {
+        orchestrationWorkspaceShellEventListeners.add(callback);
+        return () => {
+          orchestrationWorkspaceShellEventListeners.delete(callback);
         };
       },
       onThreadEvent: (callback) => {

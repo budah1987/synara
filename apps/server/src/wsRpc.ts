@@ -14,6 +14,8 @@ import {
   type ProjectDevServerEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadStreamItem,
+  type OrchestrationWorkspaceShellStreamEvent,
+  type OrchestrationWorkspaceShellSnapshot,
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
@@ -28,6 +30,7 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
+import type { ProjectionRepositoryError } from "./persistence/Errors";
 import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
@@ -191,6 +194,14 @@ function isShellRelevantEvent(event: OrchestrationEvent): boolean {
   }
 }
 
+function isWorkspaceShellRelevantEvent(event: OrchestrationEvent): boolean {
+  return event.aggregateKind === "workspace" || isShellRelevantEvent(event);
+}
+
+function isV1OrchestrationEvent(event: OrchestrationEvent): boolean {
+  return event.aggregateKind !== "workspace" && event.type !== "thread.workspace-assigned";
+}
+
 function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
@@ -255,6 +266,19 @@ export const makeWsRpcLayer = () =>
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const getWorkspaceShellSnapshot: () => Effect.Effect<
+        OrchestrationWorkspaceShellSnapshot,
+        ProjectionRepositoryError
+      > =
+        projectionReadModelQuery.getWorkspaceShellSnapshot ??
+        (() =>
+          projectionReadModelQuery.getShellSnapshot().pipe(
+            Effect.map((snapshot) => ({
+              ...snapshot,
+              protocolVersion: 2 as const,
+              workspaces: [] as OrchestrationWorkspaceShellSnapshot["workspaces"],
+            })),
+          ));
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
@@ -525,6 +549,52 @@ export const makeWsRpcLayer = () =>
         }
       };
 
+      const toWorkspaceShellStreamEvent = (
+        event: OrchestrationEvent,
+      ): Effect.Effect<Option.Option<OrchestrationWorkspaceShellStreamEvent>, never> => {
+        if (event.type === "project.deleted" || event.type === "thread.deleted") {
+          return toShellStreamEvent(event);
+        }
+
+        return getWorkspaceShellSnapshot().pipe(
+          Effect.map((snapshot) => {
+            if (event.aggregateKind === "workspace") {
+              const workspace = snapshot.workspaces.find(
+                (candidate) => candidate.id === event.aggregateId,
+              );
+              return workspace
+                ? Option.some({
+                    kind: "workspace-upserted" as const,
+                    sequence: event.sequence,
+                    workspace,
+                  })
+                : Option.none();
+            }
+            if (event.aggregateKind === "project") {
+              const project = snapshot.projects.find(
+                (candidate) => candidate.id === event.aggregateId,
+              );
+              return project
+                ? Option.some({
+                    kind: "project-upserted" as const,
+                    sequence: event.sequence,
+                    project,
+                  })
+                : Option.none();
+            }
+            const thread = snapshot.threads.find((candidate) => candidate.id === event.aggregateId);
+            return thread
+              ? Option.some({
+                  kind: "thread-upserted" as const,
+                  sequence: event.sequence,
+                  thread,
+                })
+              : Option.none();
+          }),
+          Effect.catch(() => Effect.succeed(Option.none())),
+        );
+      };
+
       const isThreadDetailEventFor = (threadId: ThreadId, event: OrchestrationEvent) =>
         event.aggregateKind === "thread" &&
         event.aggregateId === threadId &&
@@ -564,6 +634,14 @@ export const makeWsRpcLayer = () =>
             projectionReadModelQuery.getShellSnapshot(),
             "Failed to load orchestration shell snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.getCapabilities]: () =>
+          Effect.succeed({
+            protocolVersions: [1, 2],
+            worktreeWorkspacesV2: true,
+            canonicalWorkspaceRoutes: true,
+          }),
+        [ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot]: () =>
+          rpcEffect(getWorkspaceShellSnapshot(), "Failed to load workspace shell snapshot"),
         [ORCHESTRATION_WS_METHODS.repairState]: () =>
           rpcEffect(orchestrationEngine.repairState(), "Failed to repair orchestration state"),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
@@ -582,8 +660,20 @@ export const makeWsRpcLayer = () =>
                   minimum: 0,
                 }),
               ),
-            ).pipe(Effect.map((events) => Array.from(events))),
+            ).pipe(Effect.map((events) => Array.from(events).filter(isV1OrchestrationEvent))),
             "Failed to replay orchestration events",
+          ),
+        [ORCHESTRATION_WS_METHODS.replayWorkspaceEvents]: (input) =>
+          rpcEffect(
+            Stream.runCollect(
+              orchestrationEngine.readEvents(
+                clamp(input.fromSequenceExclusive, {
+                  maximum: Number.MAX_SAFE_INTEGER,
+                  minimum: 0,
+                }),
+              ),
+            ).pipe(Effect.map((events) => Array.from(events))),
+            "Failed to replay workspace orchestration events",
           ),
         [ORCHESTRATION_WS_METHODS.subscribeShell]: () =>
           Stream.merge(
@@ -610,6 +700,32 @@ export const makeWsRpcLayer = () =>
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
+        [ORCHESTRATION_WS_METHODS.subscribeWorkspaceShell]: () =>
+          Stream.merge(
+            Stream.fromEffect(
+              getWorkspaceShellSnapshot().pipe(
+                Effect.map((snapshot) => ({ kind: "snapshot" as const, snapshot })),
+                Effect.mapError((cause) =>
+                  toWsRpcError(cause, "Failed to load workspace shell snapshot"),
+                ),
+              ),
+            ),
+            bufferLiveUiStream(
+              orchestrationEngine.streamDomainEvents.pipe(
+                Stream.filter(isWorkspaceShellRelevantEvent),
+              ),
+              {
+                label: "orchestration.workspace-shell",
+                onDroppedEvents: failLiveUiStreamForSnapshotResync,
+              },
+            ).pipe(
+              Stream.mapEffect(toWorkspaceShellStreamEvent),
+              Stream.flatMap((event) =>
+                Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+              ),
+            ),
+          ),
+        [ORCHESTRATION_WS_METHODS.unsubscribeWorkspaceShell]: () => Effect.void,
         [ORCHESTRATION_WS_METHODS.subscribeThread]: (input) =>
           Stream.merge(
             Stream.fromEffect(
@@ -648,9 +764,12 @@ export const makeWsRpcLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
         [WS_METHODS.subscribeOrchestrationDomainEvents]: () =>
-          bufferLiveUiStream(orchestrationEngine.streamDomainEvents, {
-            label: "orchestration.domain-events",
-          }),
+          bufferLiveUiStream(
+            orchestrationEngine.streamDomainEvents.pipe(Stream.filter(isV1OrchestrationEvent)),
+            {
+              label: "orchestration.domain-events",
+            },
+          ),
 
         [WS_METHODS.projectsListDirectories]: (input) =>
           rpcEffect(

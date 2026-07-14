@@ -45,6 +45,7 @@ import { IoFilter } from "react-icons/io5";
 import {
   useCallback,
   useEffect,
+  Fragment,
   lazy,
   startTransition,
   useMemo,
@@ -79,6 +80,8 @@ import {
   type OrchestrationShellSnapshot,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
+  WorktreeWorkspaceId,
+  WorkspaceOperationId,
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
@@ -164,7 +167,12 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
-import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
+import {
+  DEFAULT_THREAD_TERMINAL_ID,
+  type Project,
+  type SidebarThreadSummary,
+  type Thread,
+} from "../types";
 import {
   applyAutomationEvent,
   automationAttentionCount,
@@ -1653,6 +1661,8 @@ export default function Sidebar() {
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const worktreeWorkspaces = useStore((store) => store.worktreeWorkspaces ?? []);
+  const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
   const studioProjectIdSet = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
@@ -2797,6 +2807,99 @@ export default function Sidebar() {
     handleNewThread,
     handleStartAddProject,
   ]);
+
+  const handleCreateManagedWorkspace = useCallback(
+    async (project: Project) => {
+      const api = readNativeApi();
+      if (!api) return;
+      if (!project.repositoryIdentity) {
+        toastManager.add({
+          type: "warning",
+          title: "Repository identity unavailable",
+          description: "Refresh the project before creating a managed workspace.",
+        });
+        return;
+      }
+      const provider = appSettings.defaultProvider;
+      const defaultModel = getDefaultModel(provider);
+      const modelSelection =
+        project.defaultModelSelection ?? (defaultModel ? { provider, model: defaultModel } : null);
+      if (!modelSelection) {
+        toastManager.add({
+          type: "warning",
+          title: "Model unavailable",
+          description: "Choose a default model before creating a workspace.",
+        });
+        return;
+      }
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(randomUUID());
+      const threadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.create",
+          commandId: newCommandId(),
+          workspaceId,
+          threadId,
+          projectId: project.id,
+          operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
+          title: "New workspace",
+          targetRef: project.defaultTargetRef ?? "HEAD",
+          sourceRef: null,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt,
+        });
+        setProjectExpanded(project.id, true);
+        await navigate({ to: "/$threadId", params: { threadId } });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to create workspace",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      }
+    },
+    [appSettings.defaultProvider, navigate, setProjectExpanded],
+  );
+
+  const handleCreateWorkspaceConversation = useCallback(
+    async (workspaceId: WorktreeWorkspaceId, project: Project) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const sibling = sidebarThreads.find((thread) => thread.workspaceId === workspaceId);
+      const provider = appSettings.defaultProvider;
+      const defaultModel = getDefaultModel(provider);
+      const modelSelection =
+        sibling?.modelSelection ??
+        project.defaultModelSelection ??
+        (defaultModel ? { provider, model: defaultModel } : null);
+      if (!modelSelection) return;
+      const threadId = newThreadId();
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.conversation.create",
+          commandId: newCommandId(),
+          workspaceId,
+          threadId,
+          title: "New conversation",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+        await navigate({ to: "/$threadId", params: { threadId } });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add conversation",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        });
+      }
+    },
+    [appSettings.defaultProvider, navigate, sidebarThreads],
+  );
 
   const handleImportThread = useCallback(
     async (provider: ImportProviderKind, externalId: string) => {
@@ -5932,11 +6035,14 @@ export default function Sidebar() {
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
+                  const envMode = resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
                   });
+                  if (workspaceProtocolVersion === 2 && envMode === "worktree") {
+                    void handleCreateManagedWorkspace(project);
+                  } else {
+                    void handleNewThread(project.id, { envMode });
+                  }
                 }}
               />
             </SidebarSectionToolbar>
@@ -5958,15 +6064,89 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
-              {visibleEntries.map((entry) =>
-                renderThreadRow(
-                  entry.thread,
-                  orderedProjectThreadIds,
-                  entry.depth,
-                  entry.childCount,
-                  entry.isExpanded,
-                ),
-              )}
+              {workspaceProtocolVersion === 2
+                ? worktreeWorkspaces
+                    .filter(
+                      (workspace) =>
+                        workspace.projectId === project.id && workspace.deletedAt === null,
+                    )
+                    .map((workspace) => {
+                      const workspaceEntries = visibleEntries.filter(
+                        (entry) => entry.thread.workspaceId === workspace.id,
+                      );
+                      const firstThread = workspaceEntries[0]?.thread;
+                      return (
+                        <Fragment key={workspace.id}>
+                          <SidebarMenuSubItem className="w-full">
+                            <div className="group/workspace-row flex h-7 w-full items-center gap-1 rounded-lg pr-1 pl-5 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground hover:bg-[var(--sidebar-accent)]">
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                disabled={!firstThread}
+                                onClick={() => {
+                                  if (!firstThread) return;
+                                  void navigate({
+                                    to: "/$threadId",
+                                    params: { threadId: firstThread.id },
+                                  });
+                                }}
+                              >
+                                <WorktreeIcon className="size-3.5 shrink-0" />
+                                <span className="truncate text-foreground/85">
+                                  {workspace.title}
+                                </span>
+                                <span className="shrink-0 text-[10px] text-muted-foreground/65">
+                                  {workspace.state === "ready" ? workspace.branch : workspace.state}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                className="sidebar-icon-button inline-flex size-5 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover/workspace-row:opacity-100 focus-visible:opacity-100"
+                                aria-label={`New conversation in ${workspace.title}`}
+                                title="New conversation"
+                                onClick={() =>
+                                  void handleCreateWorkspaceConversation(workspace.id, project)
+                                }
+                              >
+                                <FiPlus className="size-3.5" />
+                              </button>
+                            </div>
+                          </SidebarMenuSubItem>
+                          {workspaceEntries.map((entry) =>
+                            renderThreadRow(
+                              entry.thread,
+                              orderedProjectThreadIds,
+                              entry.depth + 1,
+                              entry.childCount,
+                              entry.isExpanded,
+                            ),
+                          )}
+                        </Fragment>
+                      );
+                    })
+                : visibleEntries.map((entry) =>
+                    renderThreadRow(
+                      entry.thread,
+                      orderedProjectThreadIds,
+                      entry.depth,
+                      entry.childCount,
+                      entry.isExpanded,
+                    ),
+                  )}
+
+              {workspaceProtocolVersion === 2
+                ? visibleEntries
+                    .filter((entry) => entry.thread.workspaceId == null)
+                    .map((entry) =>
+                      renderThreadRow(
+                        entry.thread,
+                        orderedProjectThreadIds,
+                        entry.depth,
+                        entry.childCount,
+                        entry.isExpanded,
+                      ),
+                    )
+                : null}
 
               {(canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">

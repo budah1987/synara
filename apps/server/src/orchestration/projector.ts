@@ -1,9 +1,16 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@synara/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  OrchestrationWorktreeWorkspace,
+  ThreadId,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  OrchestrationWorktreeWorkspace as OrchestrationWorktreeWorkspaceSchema,
 } from "@synara/contracts";
 import {
   addPinnedMessage,
@@ -25,9 +32,13 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  WorktreeWorkspaceCreatedPayload,
+  WorktreeWorkspaceOperationFailedPayload,
+  WorktreeWorkspaceReadyPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
+  ThreadWorkspaceAssignedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -51,6 +62,7 @@ import {
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
+type WorkspacePatch = Partial<Omit<OrchestrationWorktreeWorkspace, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
 const MAX_THREAD_CHECKPOINTS = 500;
@@ -116,6 +128,16 @@ function updateThread(
   patch: ThreadPatch,
 ): OrchestrationThread[] {
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
+}
+
+function updateWorkspace(
+  workspaces: ReadonlyArray<OrchestrationWorktreeWorkspace>,
+  workspaceId: WorktreeWorkspaceId,
+  patch: WorkspacePatch,
+): OrchestrationWorktreeWorkspace[] {
+  return workspaces.map((workspace) =>
+    workspace.id === workspaceId ? { ...workspace, ...patch } : workspace,
+  );
 }
 
 function decodeForEvent<A>(
@@ -288,6 +310,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
+    workspaces: [],
     threads: [],
     updatedAt: nowIso,
   };
@@ -316,6 +339,8 @@ export function projectEvent(
             defaultModelSelection: payload.defaultModelSelection,
             scripts: payload.scripts,
             isPinned: payload.isPinned ?? false,
+            repositoryIdentity: payload.repositoryIdentity ?? null,
+            defaultTargetRef: payload.defaultTargetRef ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -350,6 +375,12 @@ export function projectEvent(
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
                   ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
+                  ...(payload.repositoryIdentity !== undefined
+                    ? { repositoryIdentity: payload.repositoryIdentity }
+                    : {}),
+                  ...(payload.defaultTargetRef !== undefined
+                    ? { defaultTargetRef: payload.defaultTargetRef }
+                    : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
@@ -373,6 +404,104 @@ export function projectEvent(
         })),
       );
 
+    case "workspace.created":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          WorktreeWorkspaceCreatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const workspace = yield* decodeForEvent(
+          OrchestrationWorktreeWorkspaceSchema,
+          {
+            ...payload,
+            id: payload.workspaceId,
+          },
+          event.type,
+          "workspace",
+        );
+        const workspaces = nextBase.workspaces ?? [];
+        const existing = workspaces.find((entry) => entry.id === workspace.id);
+        return {
+          ...nextBase,
+          workspaces: existing
+            ? workspaces.map((entry) => (entry.id === workspace.id ? workspace : entry))
+            : [...workspaces, workspace],
+        };
+      });
+
+    case "workspace.ready":
+      return decodeForEvent(
+        WorktreeWorkspaceReadyPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+            state: "ready",
+            path: payload.path,
+            branch: payload.branch,
+            headRef: payload.headRef,
+            targetResolvedCommit: payload.targetResolvedCommit,
+            createdFromCommit: payload.createdFromCommit,
+            setupStatus: payload.setupStatus,
+            setupError: null,
+            activeOperation: null,
+            lastFailure: null,
+            updatedAt: payload.completedAt,
+          }),
+          threads: nextBase.threads.map((thread) =>
+            thread.workspaceId === payload.workspaceId
+              ? {
+                  ...thread,
+                  envMode: "worktree" as const,
+                  branch: payload.branch,
+                  worktreePath: payload.path,
+                  associatedWorktreePath: payload.path,
+                  associatedWorktreeBranch: payload.branch,
+                  associatedWorktreeRef: payload.headRef,
+                  createBranchFlowCompleted: true,
+                  updatedAt: payload.completedAt,
+                }
+              : thread,
+          ),
+        })),
+      );
+
+    case "workspace.operation-failed":
+      return decodeForEvent(
+        WorktreeWorkspaceOperationFailedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+            state: payload.kind === "setup" ? "setup-failed" : "error",
+            setupStatus: payload.kind === "setup" ? "failed" : "pending",
+            setupError: payload.kind === "setup" ? payload.summary : null,
+            path: payload.path ?? null,
+            branch: payload.branch ?? null,
+            headRef: payload.headRef ?? null,
+            targetResolvedCommit: payload.targetResolvedCommit ?? null,
+            createdFromCommit: payload.createdFromCommit ?? null,
+            activeOperation: null,
+            lastFailure: {
+              generation: payload.generation,
+              kind: payload.kind,
+              stage: payload.stage,
+              summary: payload.summary,
+              logId: payload.logId,
+            },
+            updatedAt: payload.failedAt,
+          }),
+        })),
+      );
+
     case "thread.created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -386,6 +515,7 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            workspaceId: payload.workspaceId,
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -427,6 +557,27 @@ export function projectEvent(
             : [...nextBase.threads, thread],
         };
       });
+
+    case "thread.workspace-assigned":
+      return decodeForEvent(
+        ThreadWorkspaceAssignedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workspaceId: payload.workspaceId,
+            envMode: payload.envMode,
+            branch: payload.branch,
+            worktreePath: payload.worktreePath,
+            associatedWorktreePath: payload.worktreePath,
+            associatedWorktreeBranch: payload.branch,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
 
     case "thread.deleted":
       return decodeForEvent(ThreadDeletedPayload, event.payload, event.type, "payload").pipe(

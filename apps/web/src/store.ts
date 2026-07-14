@@ -13,6 +13,9 @@ import {
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
+  type OrchestrationWorkspaceShellSnapshot,
+  type OrchestrationWorkspaceShellStreamEvent,
+  type OrchestrationWorktreeWorkspace,
   type OrchestrationSessionStatus,
   type TurnId,
 } from "@synara/contracts";
@@ -54,6 +57,8 @@ import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 
 export interface AppState {
   projects: Project[];
+  worktreeWorkspaces?: OrchestrationWorktreeWorkspace[];
+  workspaceProtocolVersion?: 1 | 2;
   threads: Thread[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
   threadsHydrated: boolean;
@@ -77,7 +82,9 @@ type ReadModelProject = OrchestrationReadModel["projects"][number];
 type ReadModelThread = OrchestrationReadModel["threads"][number];
 type ReadModelMessage = OrchestrationReadModel["threads"][number]["messages"][number];
 type ShellSnapshotProject = OrchestrationShellSnapshot["projects"][number];
+type WorkspaceShellSnapshotProject = OrchestrationWorkspaceShellSnapshot["projects"][number];
 type ShellSnapshotThread = OrchestrationShellSnapshot["threads"][number];
+type WorkspaceShellSnapshotThread = OrchestrationWorkspaceShellSnapshot["threads"][number];
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
@@ -134,6 +141,8 @@ const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-i
 
 const initialState: AppState = {
   projects: [],
+  worktreeWorkspaces: [],
+  workspaceProtocolVersion: 1,
   threads: [],
   sidebarThreadSummaryById: {},
   threadsHydrated: false,
@@ -410,6 +419,7 @@ function threadTurnStatesEqual(left: ThreadTurnState | undefined, right: ThreadT
 function toThreadShell(thread: Thread): ThreadShell {
   return {
     id: thread.id,
+    workspaceId: thread.workspaceId ?? null,
     codexThreadId: thread.codexThreadId,
     projectId: thread.projectId,
     title: thread.title,
@@ -654,6 +664,8 @@ function normalizeProjectFromReadModel(
     previous.folderName === folderName &&
     previous.localName === localName &&
     previous.cwd === incoming.workspaceRoot &&
+    (previous.repositoryIdentity ?? null) === (incoming.repositoryIdentity ?? null) &&
+    (previous.defaultTargetRef ?? null) === (incoming.defaultTargetRef ?? null) &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
@@ -672,6 +684,8 @@ function normalizeProjectFromReadModel(
     folderName,
     localName,
     cwd: incoming.workspaceRoot,
+    repositoryIdentity: incoming.repositoryIdentity ?? null,
+    defaultTargetRef: incoming.defaultTargetRef ?? null,
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
@@ -682,7 +696,7 @@ function normalizeProjectFromReadModel(
 }
 
 function normalizeProjectFromShell(
-  incoming: ShellSnapshotProject,
+  incoming: ShellSnapshotProject | WorkspaceShellSnapshotProject,
   previous: Project | undefined,
 ): Project {
   const workspaceRootKey = projectCwdKey(incoming.workspaceRoot);
@@ -698,6 +712,10 @@ function normalizeProjectFromShell(
     (persistedExpandedProjectCwds.size > 0
       ? persistedExpandedProjectCwds.has(workspaceRootKey)
       : true);
+  const repositoryIdentity =
+    "repositoryIdentity" in incoming ? (incoming.repositoryIdentity ?? null) : null;
+  const defaultTargetRef =
+    "defaultTargetRef" in incoming ? (incoming.defaultTargetRef ?? null) : null;
 
   if (
     previous &&
@@ -708,6 +726,8 @@ function normalizeProjectFromShell(
     previous.folderName === folderName &&
     previous.localName === localName &&
     previous.cwd === incoming.workspaceRoot &&
+    (previous.repositoryIdentity ?? null) === repositoryIdentity &&
+    (previous.defaultTargetRef ?? null) === defaultTargetRef &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
@@ -726,6 +746,8 @@ function normalizeProjectFromShell(
     folderName,
     localName,
     cwd: incoming.workspaceRoot,
+    repositoryIdentity,
+    defaultTargetRef,
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
@@ -1709,6 +1731,7 @@ function normalizeThreadFromReadModel(
   if (
     previous &&
     previous.projectId === incoming.projectId &&
+    (previous.workspaceId ?? null) === (incoming.workspaceId ?? null) &&
     previous.title === incoming.title &&
     previous.modelSelection === modelSelection &&
     previous.runtimeMode === incoming.runtimeMode &&
@@ -1756,6 +1779,7 @@ function normalizeThreadFromReadModel(
     id: incoming.id,
     codexThreadId: null,
     projectId: incoming.projectId,
+    workspaceId: incoming.workspaceId ?? null,
     title: incoming.title,
     modelSelection,
     runtimeMode: incoming.runtimeMode,
@@ -1807,7 +1831,7 @@ function normalizeThreadFromReadModel(
 }
 
 function normalizeThreadShellSnapshot(
-  incoming: ShellSnapshotThread,
+  incoming: ShellSnapshotThread | WorkspaceShellSnapshotThread,
   previous: Thread | undefined,
 ): {
   shell: ThreadShell;
@@ -1855,6 +1879,7 @@ function normalizeThreadShellSnapshot(
     id: incoming.id,
     codexThreadId: previous?.codexThreadId ?? null,
     projectId: incoming.projectId,
+    workspaceId: "workspaceId" in incoming ? (incoming.workspaceId ?? null) : null,
     title: incoming.title,
     modelSelection,
     runtimeMode: incoming.runtimeMode,
@@ -2154,6 +2179,7 @@ function sidebarThreadSummariesEqual(
     left !== undefined &&
     left.id === right.id &&
     left.projectId === right.projectId &&
+    (left.workspaceId ?? null) === (right.workspaceId ?? null) &&
     left.title === right.title &&
     left.modelSelection === right.modelSelection &&
     left.interactionMode === right.interactionMode &&
@@ -2196,6 +2222,7 @@ function buildSidebarThreadSummary(
   const nextSummary: SidebarThreadSummary = {
     id: thread.id,
     projectId: thread.projectId,
+    workspaceId: thread.workspaceId ?? null,
     title: thread.title,
     modelSelection: thread.modelSelection,
     interactionMode: thread.interactionMode,
@@ -4163,6 +4190,18 @@ export function syncServerShellSnapshot(
   };
 }
 
+export function syncServerWorkspaceShellSnapshot(
+  state: AppState,
+  snapshot: OrchestrationWorkspaceShellSnapshot,
+): AppState {
+  const nextState = syncServerShellSnapshot(state, snapshot);
+  return {
+    ...nextState,
+    worktreeWorkspaces: [...snapshot.workspaces],
+    workspaceProtocolVersion: 2,
+  };
+}
+
 function syncServerThreadDetailWithOptions(
   state: AppState,
   thread: ReadModelThread,
@@ -4232,6 +4271,37 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
     case "thread-removed":
       // Shell removals can be retryable draft rollbacks; explicit delete reconciliation owns tombstones.
       return removeThreadState(state, event.threadId);
+  }
+}
+
+export function applyWorkspaceShellEvent(
+  state: AppState,
+  event: OrchestrationWorkspaceShellStreamEvent,
+): AppState {
+  switch (event.kind) {
+    case "workspace-upserted": {
+      const currentWorkspaces = state.worktreeWorkspaces ?? [];
+      const existingIndex = currentWorkspaces.findIndex(
+        (workspace) => workspace.id === event.workspace.id,
+      );
+      const worktreeWorkspaces = [...currentWorkspaces];
+      if (existingIndex === -1) {
+        worktreeWorkspaces.push(event.workspace);
+      } else {
+        worktreeWorkspaces[existingIndex] = event.workspace;
+      }
+      return { ...state, worktreeWorkspaces, workspaceProtocolVersion: 2 };
+    }
+    case "workspace-removed":
+      return {
+        ...state,
+        worktreeWorkspaces: (state.worktreeWorkspaces ?? []).filter(
+          (workspace) => workspace.id !== event.workspaceId,
+        ),
+        workspaceProtocolVersion: 2,
+      };
+    default:
+      return applyShellEvent(state, event);
   }
 }
 
@@ -4322,6 +4392,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   return {
     ...normalizedState,
     projects,
+    worktreeWorkspaces: [...(readModel.workspaces ?? [])],
     threads,
     sidebarThreadSummaryById,
     threadsHydrated: true,
@@ -4522,10 +4593,12 @@ export function setThreadWorkspace(
 
 interface AppStore extends AppState {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
+  syncServerWorkspaceShellSnapshot: (snapshot: OrchestrationWorkspaceShellSnapshot) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
   syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
+  applyWorkspaceShellEvent: (event: OrchestrationWorkspaceShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
   removeDeletedProjectFromClientState: (projectId: Project["id"]) => void;
@@ -4545,11 +4618,14 @@ interface AppStore extends AppState {
 export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(),
   syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
+  syncServerWorkspaceShellSnapshot: (snapshot) =>
+    set((state) => syncServerWorkspaceShellSnapshot(state, snapshot)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
   syncServerThreadDetailHotPath: (thread) =>
     set((state) => syncServerThreadDetailHotPath(state, thread)),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
   applyShellEvent: (event) => set((state) => applyShellEvent(state, event)),
+  applyWorkspaceShellEvent: (event) => set((state) => applyWorkspaceShellEvent(state, event)),
   applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
   applyOrchestrationEventsHotPath: (events) =>
     set((state) =>

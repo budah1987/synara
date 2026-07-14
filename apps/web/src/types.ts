@@ -170,6 +170,8 @@ export interface Project {
   folderName: string;
   localName: string | null;
   cwd: string;
+  repositoryIdentity?: string | null;
+  defaultTargetRef?: string | null;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;
@@ -200,6 +202,7 @@ export interface ThreadWorkspacePatch {
 
 export interface Thread extends ThreadWorkspaceState {
   id: ThreadId;
+  workspaceId?: string | null;
   codexThreadId: string | null;
   projectId: ProjectId;
   title: string;
@@ -238,6 +241,7 @@ export interface Thread extends ThreadWorkspaceState {
 
 export interface ThreadShell extends ThreadWorkspaceState {
   id: ThreadId;
+  workspaceId?: string | null;
   codexThreadId: string | null;
   projectId: ProjectId;
   title: string;
@@ -278,6 +282,7 @@ export interface ThreadTurnState {
 
 export interface SidebarThreadSummary {
   id: ThreadId;
+  workspaceId?: string | null;
   projectId: ProjectId;
   title: string;
   modelSelection: ModelSelection;
