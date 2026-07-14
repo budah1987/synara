@@ -6261,7 +6261,9 @@ export default function Sidebar() {
                     )
                     .map((workspace) => {
                       const workspaceThreads = sortThreadsForSidebar(
-                        sidebarThreads.filter((thread) => thread.workspaceId === workspace.id),
+                        sidebarDisplayThreads.filter(
+                          (thread) => thread.workspaceId === workspace.id,
+                        ),
                         appSettings.sidebarThreadSortOrder,
                       );
                       const firstThread = workspaceThreads[0];
