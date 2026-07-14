@@ -104,6 +104,7 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
+import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
   reconcileDeletedThreadFromClient,
@@ -1375,6 +1376,9 @@ export default function Sidebar() {
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
@@ -2812,14 +2816,6 @@ export default function Sidebar() {
     async (project: Project) => {
       const api = readNativeApi();
       if (!api) return;
-      if (!project.repositoryIdentity) {
-        toastManager.add({
-          type: "warning",
-          title: "Repository identity unavailable",
-          description: "Refresh the project before creating a managed workspace.",
-        });
-        return;
-      }
       const provider = appSettings.defaultProvider;
       const defaultModel = getDefaultModel(provider);
       const modelSelection =
@@ -2851,6 +2847,12 @@ export default function Sidebar() {
           interactionMode: "default",
           createdAt,
         });
+        const snapshot = await waitForWorkspaceConversationSnapshot({
+          workspaceId,
+          threadId,
+          loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+        });
+        syncServerWorkspaceShellSnapshot(snapshot);
         setProjectExpanded(project.id, true);
         await navigate({ to: "/$threadId", params: { threadId } });
       } catch (error) {
@@ -2861,7 +2863,7 @@ export default function Sidebar() {
         });
       }
     },
-    [appSettings.defaultProvider, navigate, setProjectExpanded],
+    [appSettings.defaultProvider, navigate, setProjectExpanded, syncServerWorkspaceShellSnapshot],
   );
 
   const handleCreateWorkspaceConversation = useCallback(
@@ -2889,6 +2891,12 @@ export default function Sidebar() {
           interactionMode: "default",
           createdAt: new Date().toISOString(),
         });
+        const snapshot = await waitForWorkspaceConversationSnapshot({
+          workspaceId,
+          threadId,
+          loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+        });
+        syncServerWorkspaceShellSnapshot(snapshot);
         await navigate({ to: "/$threadId", params: { threadId } });
       } catch (error) {
         toastManager.add({
@@ -2898,7 +2906,7 @@ export default function Sidebar() {
         });
       }
     },
-    [appSettings.defaultProvider, navigate, sidebarThreads],
+    [appSettings.defaultProvider, navigate, sidebarThreads, syncServerWorkspaceShellSnapshot],
   );
 
   const handleImportThread = useCallback(

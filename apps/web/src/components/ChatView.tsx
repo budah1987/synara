@@ -27,6 +27,8 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
   ThreadId,
+  WorktreeWorkspaceId,
+  WorkspaceOperationId,
   ThreadMarkerId,
   type ThreadMarker,
   type ThreadMarkerColor,
@@ -320,6 +322,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
+import { waitForManagedWorkspaceReady } from "../lib/managedWorkspace";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { compareProvidersByOrder } from "../providerOrdering";
 import {
@@ -1097,6 +1100,7 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
+  const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
   const { settings, updateSettings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -7633,6 +7637,8 @@ export default function ChatView({
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
       isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
+    const shouldCreateManagedWorkspace =
+      workspaceProtocolVersion === 2 && shouldCreateWorktree && isLocalDraftThread;
     if (shouldCreateWorktree && !nextThreadBranch) {
       setStoreThreadError(
         threadIdForSend,
@@ -7781,47 +7787,9 @@ export default function ChatView({
     }
 
     let createdServerThreadForLocalDraft = false;
+    let createdManagedWorkspace = false;
     let turnStartSucceeded = false;
     await (async () => {
-      // On first message: lock in branch + create worktree if needed.
-      if (baseBranchForWorktree) {
-        const result = await createWorktreeMutation.mutateAsync({
-          cwd: targetProjectCwdForSend,
-          branch: baseBranchForWorktree,
-          newBranch: buildTemporaryWorktreeBranchName(),
-        });
-        beginLocalDispatch({
-          worktreeSetupStepId: "prepare-thread",
-          setupScriptName: worktreeSetupScriptName,
-        });
-        nextThreadBranch = result.worktree.branch;
-        nextThreadWorktreePath = result.worktree.path;
-        const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
-          branch: result.worktree.branch,
-          worktreePath: result.worktree.path,
-        });
-        if (isServerThread) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.meta.update",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            envMode: "worktree",
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
-            associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
-            associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
-          });
-          // Keep local thread state in sync immediately so terminal drawer opens
-          // with the worktree cwd/env instead of briefly using the project root.
-          setStoreThreadWorkspace(threadIdForSend, {
-            branch: result.worktree.branch,
-            worktreePath: result.worktree.path,
-            ...nextAssociatedWorktree,
-          });
-        }
-      }
-
       const threadCreateModelSelection: ModelSelection = buildModelSelection(
         selectedModelSelectionForSend.provider,
         selectedModelSelectionForSend.model ||
@@ -7831,7 +7799,93 @@ export default function ChatView({
         selectedModelSelectionForSend.options,
       );
 
-      if (isLocalDraftThread) {
+      // On first message: lock in branch + create worktree if needed.
+      if (baseBranchForWorktree) {
+        if (shouldCreateManagedWorkspace) {
+          const workspaceId = WorktreeWorkspaceId.makeUnsafe(randomUUID());
+          await api.orchestration.dispatchCommand({
+            type: "workspace.create",
+            commandId: newCommandId(),
+            workspaceId,
+            threadId: threadIdForSend,
+            projectId: targetProjectIdForSend,
+            operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
+            title,
+            targetRef: baseBranchForWorktree,
+            sourceRef: null,
+            modelSelection: threadCreateModelSelection,
+            runtimeMode: nextRuntimeModeForSend,
+            interactionMode: interactionModeForSend,
+            createdAt: activeThread.createdAt,
+          });
+
+          createdManagedWorkspace = true;
+          createdServerThreadForLocalDraft = true;
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
+          });
+          const workspace = await waitForManagedWorkspaceReady({
+            workspaceId,
+            loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+          });
+          nextThreadBranch = workspace.branch;
+          nextThreadWorktreePath = workspace.path;
+          const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+          });
+          setDraftThreadContext(threadIdForSend, {
+            projectId: targetProjectIdForSend,
+            envMode: "worktree",
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+          });
+          setStoreThreadWorkspace(threadIdForSend, {
+            branch: workspace.branch,
+            worktreePath: workspace.path,
+            ...nextAssociatedWorktree,
+          });
+        } else {
+          const result = await createWorktreeMutation.mutateAsync({
+            cwd: targetProjectCwdForSend,
+            branch: baseBranchForWorktree,
+            newBranch: buildTemporaryWorktreeBranchName(),
+          });
+          beginLocalDispatch({
+            worktreeSetupStepId: "prepare-thread",
+            setupScriptName: worktreeSetupScriptName,
+          });
+          nextThreadBranch = result.worktree.branch;
+          nextThreadWorktreePath = result.worktree.path;
+          const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
+            branch: result.worktree.branch,
+            worktreePath: result.worktree.path,
+          });
+          if (isServerThread) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              envMode: "worktree",
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              associatedWorktreePath: nextAssociatedWorktree.associatedWorktreePath,
+              associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
+              associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
+            });
+            // Keep local thread state in sync immediately so terminal drawer opens
+            // with the worktree cwd/env instead of briefly using the project root.
+            setStoreThreadWorkspace(threadIdForSend, {
+              branch: result.worktree.branch,
+              worktreePath: result.worktree.path,
+              ...nextAssociatedWorktree,
+            });
+          }
+        }
+      }
+
+      if (isLocalDraftThread && !createdManagedWorkspace) {
         const inheritedProjectInstructions =
           useProjectInstructionsStore.getState().instructionsByProjectId[targetProjectIdForSend] ??
           "";
@@ -7880,7 +7934,7 @@ export default function ChatView({
       }
 
       const setupScript = setupScriptForWorktree;
-      if (setupScript) {
+      if (setupScript && !createdManagedWorkspace) {
         let shouldRunSetupScript = false;
         if (isServerThread) {
           shouldRunSetupScript = true;
@@ -7975,7 +8029,7 @@ export default function ChatView({
       // Surface the failure on whichever setup step was active (no-op for
       // sends without a worktree setup in flight).
       failLocalDispatchWorktreeSetup();
-      if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
+      if (createdServerThreadForLocalDraft && !createdManagedWorkspace && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
         await api.orchestration
           .dispatchCommand({
