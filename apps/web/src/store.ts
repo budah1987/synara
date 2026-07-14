@@ -1879,7 +1879,11 @@ function normalizeThreadShellSnapshot(
     id: incoming.id,
     codexThreadId: previous?.codexThreadId ?? null,
     projectId: incoming.projectId,
-    workspaceId: "workspaceId" in incoming ? (incoming.workspaceId ?? null) : null,
+    // V1 shell updates do not carry workspace ownership. Preserve the V2 value
+    // already known by the client instead of detaching the conversation whenever
+    // a compatible title/status upsert arrives (for example after Rename).
+    workspaceId:
+      "workspaceId" in incoming ? (incoming.workspaceId ?? null) : (previous?.workspaceId ?? null),
     title: incoming.title,
     modelSelection,
     runtimeMode: incoming.runtimeMode,

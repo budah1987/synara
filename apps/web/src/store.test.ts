@@ -962,6 +962,53 @@ describe("store pure functions", () => {
     expect(next.threadShellById?.[threadId]?.createBranchFlowCompleted).toBe(true);
   });
 
+  it("preserves workspace ownership when a V1 shell upsert renames a conversation", () => {
+    const threadId = ThreadId.makeUnsafe("thread-workspace-rename");
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-rename");
+    const initialState = syncServerReadModel(
+      makeState(makeThread({ id: threadId, workspaceId })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          workspaceId,
+          title: "Original title",
+        }),
+      ),
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: {
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Renamed title",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "worktree",
+        branch: "synara/workspace-rename",
+        worktreePath: "/tmp/workspace-rename",
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+        handoff: null,
+        session: null,
+      },
+    } satisfies OrchestrationShellStreamEvent);
+
+    expect(next.threads.find((thread) => thread.id === threadId)).toMatchObject({
+      title: "Renamed title",
+      workspaceId,
+    });
+    expect(next.sidebarThreadSummaryById[threadId]?.workspaceId).toBe(workspaceId);
+  });
+
   it("settles a running latest turn immediately when session stop is requested", () => {
     const initialState = makeState(
       makeThread({
