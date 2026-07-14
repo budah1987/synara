@@ -7,7 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import { ThreadId } from "@synara/contracts";
 
-import { resolveChatHeaderThreadIconKind, resolveVisibleConversationTabs } from "./ChatHeader";
+import {
+  resolveChatHeaderThreadIconKind,
+  resolveTabStripScrollLeft,
+  resolveVisibleConversationTabs,
+} from "./ChatHeader";
 
 const chatTab = (id: string, title: string) => ({
   id: ThreadId.makeUnsafe(id),
@@ -71,5 +75,43 @@ describe("resolveVisibleConversationTabs", () => {
         activeSurface: "chat",
       }),
     ).toEqual(availableTabs);
+  });
+});
+
+describe("resolveTabStripScrollLeft", () => {
+  it("scrolls left when the active tab falls before the visible strip", () => {
+    expect(
+      resolveTabStripScrollLeft({
+        scrollLeft: 120,
+        viewportStart: 100,
+        viewportEnd: 400,
+        tabStart: 80,
+        tabEnd: 180,
+      }),
+    ).toBe(96);
+  });
+
+  it("scrolls right when the active tab falls after the visible strip", () => {
+    expect(
+      resolveTabStripScrollLeft({
+        scrollLeft: 120,
+        viewportStart: 100,
+        viewportEnd: 400,
+        tabStart: 350,
+        tabEnd: 430,
+      }),
+    ).toBe(154);
+  });
+
+  it("leaves an already visible tab in place", () => {
+    expect(
+      resolveTabStripScrollLeft({
+        scrollLeft: 120,
+        viewportStart: 100,
+        viewportEnd: 400,
+        tabStart: 140,
+        tabEnd: 360,
+      }),
+    ).toBeNull();
   });
 });

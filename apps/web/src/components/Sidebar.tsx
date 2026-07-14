@@ -105,6 +105,7 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
+import { readEditorRailActiveChat } from "../editorViewState";
 import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
@@ -6292,9 +6293,16 @@ export default function Sidebar() {
                                     disabled={!firstThread}
                                     onClick={() => {
                                       if (!firstThread) return;
+                                      const rememberedThreadId = readEditorRailActiveChat(
+                                        `workspace:${workspace.id}`,
+                                      );
+                                      const targetThread =
+                                        workspaceThreads.find(
+                                          (thread) => thread.id === rememberedThreadId,
+                                        ) ?? firstThread;
                                       void navigate({
                                         to: "/$threadId",
-                                        params: { threadId: firstThread.id },
+                                        params: { threadId: targetThread.id },
                                       });
                                     }}
                                     onDoubleClick={() =>

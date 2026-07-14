@@ -14,7 +14,15 @@ import {
   type WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
@@ -54,6 +62,7 @@ import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
 import {
+  storeEditorRailActiveChat,
   readEditorRailChatTabs,
   storeEditorRailChatTabs,
   type EditorRailChatTabSnapshot,
@@ -177,6 +186,26 @@ export function resolveVisibleConversationTabs(input: {
   return orderedOpenTabs.map((tab) => availableTabById.get(tab.id) ?? tab);
 }
 
+export function resolveTabStripScrollLeft(input: {
+  scrollLeft: number;
+  viewportStart: number;
+  viewportEnd: number;
+  tabStart: number;
+  tabEnd: number;
+  inset?: number;
+}): number | null {
+  const inset = input.inset ?? 4;
+  const visibleStart = input.viewportStart + inset;
+  const visibleEnd = input.viewportEnd - inset;
+  if (input.tabStart < visibleStart) {
+    return Math.max(0, input.scrollLeft - (visibleStart - input.tabStart));
+  }
+  if (input.tabEnd > visibleEnd) {
+    return Math.max(0, input.scrollLeft + (input.tabEnd - visibleEnd));
+  }
+  return null;
+}
+
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
 // editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
@@ -289,6 +318,9 @@ function EditorRailTabs(props: {
         ];
   });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef<HTMLDivElement>(null);
+  const previousActiveTabKeyRef = useRef<string | null>(null);
   const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const displayThreads = useStore(selectDisplayThreads);
   const currentChatTab = useMemo<EditorRailChatTab>(
@@ -332,6 +364,7 @@ function EditorRailTabs(props: {
     if (props.activeSurface !== "chat") {
       return;
     }
+    storeEditorRailActiveChat(tabScopeKey, props.activeThreadId);
     setAndStoreOpenChatTabs((current) => {
       const existingIndex = current.findIndex((thread) => thread.id === currentChatTab.id);
       if (existingIndex < 0) {
@@ -346,7 +379,13 @@ function EditorRailTabs(props: {
       }
       return current.map((thread) => (thread.id === currentChatTab.id ? currentChatTab : thread));
     });
-  }, [currentChatTab, props.activeSurface, setAndStoreOpenChatTabs]);
+  }, [
+    currentChatTab,
+    props.activeSurface,
+    props.activeThreadId,
+    setAndStoreOpenChatTabs,
+    tabScopeKey,
+  ]);
   const chatTabs = useMemo(() => {
     const sortedProjectThreads = sortThreadsForSidebar(
       displayThreads.filter((thread) =>
@@ -380,6 +419,46 @@ function EditorRailTabs(props: {
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
   const shouldShowTabs = props.workspaceId !== null || tabCount > 1;
+  const activeTabKey =
+    props.activeSurface === "terminal" ? "terminal" : `chat:${props.activeThreadId}`;
+  const keepActiveTabVisible = useCallback((behavior: ScrollBehavior) => {
+    const tabStrip = tabStripRef.current;
+    const activeTab = activeTabRef.current;
+    if (!tabStrip || !activeTab) {
+      return;
+    }
+    const stripRect = tabStrip.getBoundingClientRect();
+    const tabRect = activeTab.getBoundingClientRect();
+    const nextScrollLeft = resolveTabStripScrollLeft({
+      scrollLeft: tabStrip.scrollLeft,
+      viewportStart: stripRect.left,
+      viewportEnd: stripRect.right,
+      tabStart: tabRect.left,
+      tabEnd: tabRect.right,
+    });
+    if (nextScrollLeft === null || Math.abs(nextScrollLeft - tabStrip.scrollLeft) < 1) {
+      return;
+    }
+    tabStrip.scrollTo({ left: nextScrollLeft, behavior });
+  }, []);
+  useLayoutEffect(() => {
+    const switchedTabs =
+      previousActiveTabKeyRef.current !== null && previousActiveTabKeyRef.current !== activeTabKey;
+    const prefersReducedMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    keepActiveTabVisible(switchedTabs && !prefersReducedMotion ? "smooth" : "auto");
+    previousActiveTabKeyRef.current = activeTabKey;
+  }, [activeTabKey, chatTabs, keepActiveTabVisible, terminalTabVisible]);
+  useEffect(() => {
+    const tabStrip = tabStripRef.current;
+    if (!tabStrip || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => keepActiveTabVisible("auto"));
+    observer.observe(tabStrip);
+    return () => observer.disconnect();
+  }, [keepActiveTabVisible]);
   const newTerminalTab = () => {
     setTerminalTabOpen(true);
     props.onNewTerminal();
@@ -404,6 +483,7 @@ function EditorRailTabs(props: {
         current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],
       );
     }
+    storeEditorRailActiveChat(tabScopeKey, threadId);
     props.onOpenChat(threadId);
   };
   const closeChatTab = (threadId: ThreadId) => {
@@ -494,47 +574,62 @@ function EditorRailTabs(props: {
         // Same chip tabs as the right dock's pane strip so every tab row in the
         // app reads identically. Pushed to the header's right edge (ml-auto) so the
         // title and new/history controls stay grouped on the left.
-        <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {chatTabs.map((thread) => (
-            <SurfaceTabChip
-              key={thread.id}
-              active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
-              title={thread.title}
-              label={thread.title}
-              labelClassName="max-w-24"
-              icon={
-                <ProviderIcon
-                  provider={thread.provider}
-                  tone="header"
-                  className="size-3 shrink-0"
+        <div className="relative ml-auto min-w-0 flex-1 [container-type:inline-size]">
+          <div
+            ref={tabStripRef}
+            className="overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Open workspace tabs"
+          >
+            <div className="flex w-max min-w-full items-center justify-end gap-1">
+              {chatTabs.map((thread) => {
+                const active = props.activeSurface === "chat" && thread.id === props.activeThreadId;
+                return (
+                  <SurfaceTabChip
+                    key={thread.id}
+                    ref={active ? activeTabRef : undefined}
+                    active={active}
+                    title={thread.title}
+                    label={thread.title}
+                    labelClassName="max-w-[clamp(4.5rem,20cqi,8rem)]"
+                    icon={
+                      <ProviderIcon
+                        provider={thread.provider}
+                        tone="header"
+                        className="size-3 shrink-0"
+                      />
+                    }
+                    closeLabel={`Close ${thread.title}`}
+                    closePlacement="trailing"
+                    renameLabel={`Rename ${thread.title}`}
+                    onSelect={() => openChatTab(thread.id)}
+                    onClose={() => closeChatTab(thread.id)}
+                    onRename={() => props.onRenameChat(thread.id, thread.title)}
+                    onContextMenu={(event) => openChatTabContextMenu(event, thread)}
+                  />
+                );
+              })}
+              {terminalTabVisible ? (
+                <SurfaceTabChip
+                  ref={props.activeSurface === "terminal" ? activeTabRef : undefined}
+                  active={props.activeSurface === "terminal"}
+                  title="Terminal"
+                  label="Terminal"
+                  labelClassName="max-w-[clamp(4.5rem,20cqi,8rem)]"
+                  icon={
+                    <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />
+                  }
+                  trailing={
+                    props.terminalHasRunningActivity ? (
+                      <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                    ) : null
+                  }
+                  onSelect={openTerminalTab}
+                  closeLabel="Close Terminal"
+                  onClose={closeTerminalTab}
                 />
-              }
-              closeLabel={`Close ${thread.title}`}
-              closePlacement="trailing"
-              renameLabel={`Rename ${thread.title}`}
-              onSelect={() => openChatTab(thread.id)}
-              onClose={() => closeChatTab(thread.id)}
-              onRename={() => props.onRenameChat(thread.id, thread.title)}
-              onContextMenu={(event) => openChatTabContextMenu(event, thread)}
-            />
-          ))}
-          {terminalTabVisible ? (
-            <SurfaceTabChip
-              active={props.activeSurface === "terminal"}
-              title="Terminal"
-              label="Terminal"
-              labelClassName="max-w-24"
-              icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
-              trailing={
-                props.terminalHasRunningActivity ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
-                ) : null
-              }
-              onSelect={openTerminalTab}
-              closeLabel="Close Terminal"
-              onClose={closeTerminalTab}
-            />
-          ) : null}
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

@@ -195,23 +195,7 @@ export const DOCK_TAB_TRAILING_ACTION_CLASS_NAME =
  * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
  * tab count badge); `labelClassName` lets a call site cap the label width.
  */
-export function SurfaceTabChip({
-  icon,
-  label,
-  active,
-  title,
-  leading,
-  trailing,
-  className,
-  labelClassName,
-  closeLabel,
-  closePlacement = "leading-swap",
-  renameLabel,
-  onSelect,
-  onClose,
-  onRename,
-  onContextMenu,
-}: {
+export interface SurfaceTabChipProps {
   icon: ReactNode;
   label: ReactNode;
   active?: boolean | undefined;
@@ -227,97 +211,121 @@ export function SurfaceTabChip({
   onClose?: (() => void) | undefined;
   onRename?: (() => void) | undefined;
   onContextMenu?: MouseEventHandler<HTMLDivElement> | undefined;
-}) {
-  return (
-    <div
-      className={cn(
-        "group/dock-tab",
-        DOCK_TAB_CHIP_CLASS_NAME,
-        active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
-        className,
-      )}
-      onContextMenu={onContextMenu}
-    >
-      {onClose && closePlacement === "leading-swap" ? (
-        <button
-          type="button"
-          className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
-          aria-label={closeLabel}
-          title={closeLabel}
-          onClick={(event) => {
-            event.stopPropagation();
-            onClose();
-          }}
-        >
-          <span
-            className={cn("flex items-center justify-center", DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME)}
-          >
-            {icon}
-          </span>
-          <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
-        </button>
-      ) : (
-        <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
-      )}
-      {onSelect ? (
-        <button
-          type="button"
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-          title={title}
-          aria-pressed={active}
-          onClick={(event) => {
-            event.stopPropagation();
-            onSelect();
-          }}
-        >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
-        </button>
-      ) : (
-        // Non-selectable chips (a lone tab that cannot switch to anything) render the
-        // label as static text so keyboard/AT users don't land on a button that does
-        // nothing.
-        <span
-          className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
-          title={title}
-        >
-          {leading}
-          <span className="truncate">{label}</span>
-          {trailing}
-        </span>
-      )}
-      {onRename ? (
-        <button
-          type="button"
-          className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
-          aria-label={renameLabel}
-          title={renameLabel}
-          onClick={(event) => {
-            event.stopPropagation();
-            onRename();
-          }}
-        >
-          <CentralIcon name="pencil" className="size-3 shrink-0" />
-        </button>
-      ) : null}
-      {onClose && closePlacement === "trailing" ? (
-        <button
-          type="button"
-          className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
-          aria-label={closeLabel}
-          title={closeLabel}
-          onClick={(event) => {
-            event.stopPropagation();
-            onClose();
-          }}
-        >
-          <CentralIcon name="cross-small" className="size-3.5 shrink-0" />
-        </button>
-      ) : null}
-    </div>
-  );
 }
+
+export const SurfaceTabChip = forwardRef<HTMLDivElement, SurfaceTabChipProps>(
+  function SurfaceTabChip(
+    {
+      icon,
+      label,
+      active,
+      title,
+      leading,
+      trailing,
+      className,
+      labelClassName,
+      closeLabel,
+      closePlacement = "leading-swap",
+      renameLabel,
+      onSelect,
+      onClose,
+      onRename,
+      onContextMenu,
+    },
+    ref,
+  ) {
+    return (
+      <div
+        ref={ref}
+        className={cn(
+          "group/dock-tab",
+          DOCK_TAB_CHIP_CLASS_NAME,
+          active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
+          className,
+        )}
+        onContextMenu={onContextMenu}
+      >
+        {onClose && closePlacement === "leading-swap" ? (
+          <button
+            type="button"
+            className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
+            aria-label={closeLabel}
+            title={closeLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+          >
+            <span
+              className={cn(
+                "flex items-center justify-center",
+                DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME,
+              )}
+            >
+              {icon}
+            </span>
+            <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
+          </button>
+        ) : (
+          <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
+        )}
+        {onSelect ? (
+          <button
+            type="button"
+            className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+            title={title}
+            aria-pressed={active}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect();
+            }}
+          >
+            {leading}
+            <span className="truncate">{label}</span>
+            {trailing}
+          </button>
+        ) : (
+          <span
+            className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
+            title={title}
+          >
+            {leading}
+            <span className="truncate">{label}</span>
+            {trailing}
+          </span>
+        )}
+        {onRename ? (
+          <button
+            type="button"
+            className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
+            aria-label={renameLabel}
+            title={renameLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRename();
+            }}
+          >
+            <CentralIcon name="pencil" className="size-3 shrink-0" />
+          </button>
+        ) : null}
+        {onClose && closePlacement === "trailing" ? (
+          <button
+            type="button"
+            className={DOCK_TAB_TRAILING_ACTION_CLASS_NAME}
+            aria-label={closeLabel}
+            title={closeLabel}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+          >
+            <CentralIcon name="cross-small" className="size-3.5 shrink-0" />
+          </button>
+        ) : null}
+      </div>
+    );
+  },
+);
 
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
   "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0";

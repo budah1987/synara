@@ -8,8 +8,10 @@ import { isProviderKind } from "./providerOrdering";
 
 const EDITOR_VIEW_STATE_STORAGE_KEY = "synara.editor.viewStateByThreadId";
 const EDITOR_RAIL_CHAT_TABS_STORAGE_KEY = "synara.editor.railChatTabsByProjectId";
+const EDITOR_RAIL_ACTIVE_CHAT_STORAGE_KEY = "synara.editor.railActiveChatByScopeId";
 const MAX_PERSISTED_THREADS = 50;
 const MAX_EDITOR_RAIL_CHAT_TABS = 8;
+const MAX_PERSISTED_EDITOR_RAIL_SCOPES = 100;
 
 export interface EditorViewStateSnapshot {
   expandedDirectories: ReadonlyArray<string>;
@@ -29,6 +31,13 @@ export interface EditorRailChatTabSnapshot {
 }
 
 type PersistedEditorRailChatTabsMap = Record<string, ReadonlyArray<EditorRailChatTabSnapshot>>;
+
+interface PersistedEditorRailActiveChat {
+  threadId: ThreadId;
+  updatedAt: number;
+}
+
+type PersistedEditorRailActiveChatMap = Record<string, PersistedEditorRailActiveChat>;
 
 function readPersistedMap(): PersistedEditorViewStateMap {
   if (typeof window === "undefined") {
@@ -168,6 +177,62 @@ export function storeEditorRailChatTabs(
       map[scopeKey] = normalizedTabs;
     }
     window.localStorage.setItem(EDITOR_RAIL_CHAT_TABS_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Best-effort preference persistence only.
+  }
+}
+
+function readEditorRailActiveChatMap(): PersistedEditorRailActiveChatMap {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(EDITOR_RAIL_ACTIVE_CHAT_STORAGE_KEY);
+    const parsed: unknown = raw === null ? null : JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return {};
+    }
+    const map: PersistedEditorRailActiveChatMap = {};
+    for (const [scopeKey, rawEntry] of Object.entries(parsed)) {
+      if (typeof rawEntry !== "object" || rawEntry === null || Array.isArray(rawEntry)) {
+        continue;
+      }
+      const entry = rawEntry as Record<string, unknown>;
+      if (typeof entry.threadId !== "string" || typeof entry.updatedAt !== "number") {
+        continue;
+      }
+      map[scopeKey] = {
+        threadId: entry.threadId as ThreadId,
+        updatedAt: entry.updatedAt,
+      };
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+export function readEditorRailActiveChat(scopeKey: string): ThreadId | null {
+  return readEditorRailActiveChatMap()[scopeKey]?.threadId ?? null;
+}
+
+export function storeEditorRailActiveChat(scopeKey: string, threadId: ThreadId): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    const map = readEditorRailActiveChatMap();
+    map[scopeKey] = { threadId, updatedAt: Date.now() };
+    const entries = Object.entries(map);
+    if (entries.length > MAX_PERSISTED_EDITOR_RAIL_SCOPES) {
+      entries
+        .toSorted((left, right) => left[1].updatedAt - right[1].updatedAt)
+        .slice(0, entries.length - MAX_PERSISTED_EDITOR_RAIL_SCOPES)
+        .forEach(([staleScopeKey]) => {
+          delete map[staleScopeKey];
+        });
+    }
+    window.localStorage.setItem(EDITOR_RAIL_ACTIVE_CHAT_STORAGE_KEY, JSON.stringify(map));
   } catch {
     // Best-effort preference persistence only.
   }
