@@ -149,6 +149,31 @@ const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
 type EditorRailChatTab = EditorRailChatTabSnapshot;
 
+export function resolveVisibleConversationTabs(input: {
+  workspaceScoped: boolean;
+  availableTabs: ReadonlyArray<EditorRailChatTab>;
+  openTabs: ReadonlyArray<EditorRailChatTab>;
+  activeTab: EditorRailChatTab;
+  activeSurface: "chat" | "terminal";
+}): ReadonlyArray<EditorRailChatTab> {
+  const availableTabById = new Map(input.availableTabs.map((tab) => [tab.id, tab] as const));
+  const activeTabIsAvailable = availableTabById.has(input.activeTab.id);
+
+  if (input.workspaceScoped) {
+    if (input.activeSurface !== "chat" || activeTabIsAvailable) {
+      return input.availableTabs;
+    }
+    return [...input.availableTabs, input.activeTab];
+  }
+
+  const activeTabIsOpen = input.openTabs.some((tab) => tab.id === input.activeTab.id);
+  const orderedOpenTabs =
+    input.activeSurface === "chat" && !activeTabIsOpen
+      ? [...input.openTabs, input.activeTab]
+      : input.openTabs;
+  return orderedOpenTabs.map((tab) => availableTabById.get(tab.id) ?? tab);
+}
+
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
 // editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
@@ -326,27 +351,22 @@ function EditorRailTabs(props: {
       ),
       settings.sidebarThreadSortOrder,
     );
-    const sidebarThreadById = new Map(
-      sortedProjectThreads.map((thread) => [
-        thread.id,
-        {
-          id: thread.id,
-          title: thread.title,
-          provider: thread.session?.provider ?? thread.modelSelection.provider,
-        },
-      ]),
-    );
-    const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
-    const orderedOpenTabs =
-      props.activeSurface === "chat" && !activeChatAlreadyOpen
-        ? [...openChatTabs, currentChatTab]
-        : openChatTabs;
-    return orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
+    const availableTabs = sortedProjectThreads.map((thread) => ({
+      id: thread.id,
+      title: thread.title,
+      provider: thread.session?.provider ?? thread.modelSelection.provider,
+    }));
+    return resolveVisibleConversationTabs({
+      workspaceScoped: props.workspaceId !== null,
+      availableTabs,
+      openTabs: openChatTabs,
+      activeTab: currentChatTab,
+      activeSurface: props.activeSurface,
+    });
   }, [
     currentChatTab,
     displayThreads,
     props.activeSurface,
-    props.activeThreadId,
     openChatTabs,
     props.projectId,
     props.workspaceId,
@@ -456,9 +476,9 @@ function EditorRailTabs(props: {
                   className="size-3 shrink-0"
                 />
               }
-              closeLabel={`Close ${thread.title}`}
+              closeLabel={props.workspaceId === null ? `Close ${thread.title}` : undefined}
               onSelect={() => openChatTab(thread.id)}
-              onClose={() => closeChatTab(thread.id)}
+              onClose={props.workspaceId === null ? () => closeChatTab(thread.id) : undefined}
             />
           ))}
           {terminalTabVisible ? (
