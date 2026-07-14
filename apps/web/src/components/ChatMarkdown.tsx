@@ -1072,8 +1072,34 @@ function ChatMarkdown({
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
   }, []);
-  const markdownComponents = useMemo<Components>(
-    () => ({
+  const markdownComponents = useMemo<Components>(() => {
+    const customComponents = {
+      [COMPOSER_CHIP_TAG_NAME]: (props: {
+        className?: string | undefined;
+        [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
+      }) => (
+        <ComposerChipElement
+          serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
+          theme={resolvedTheme}
+          mentionReferences={mentionReferences ?? []}
+        />
+      ),
+      [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
+        [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
+      }) => {
+        const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
+        const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
+        const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
+        if (!context) {
+          return null;
+        }
+        const tooltipText =
+          context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
+        return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
+      },
+    } as unknown as Components;
+
+    return {
       a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
         const isExternalHttp = isExternalHttpHref(restoredHref);
@@ -1204,48 +1230,22 @@ function ChatMarkdown({
         }
         return <input {...props} />;
       },
-      // Custom elements emitted by the composer-chips remark plugin (user
-      // variant only; they never appear in assistant markdown). `Components`
-      // only models intrinsic tags, so these entries are typed on their own
-      // and cast into the map.
-      ...({
-        [COMPOSER_CHIP_TAG_NAME]: (props: {
-          className?: string | undefined;
-          [COMPOSER_CHIP_SEGMENT_ATTRIBUTE]?: string | undefined;
-        }) => (
-          <ComposerChipElement
-            serializedSegment={props[COMPOSER_CHIP_SEGMENT_ATTRIBUTE]}
-            theme={resolvedTheme}
-            mentionReferences={mentionReferences ?? []}
-          />
-        ),
-        [TERMINAL_CONTEXT_CHIP_TAG_NAME]: (props: {
-          [TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE]?: string | undefined;
-        }) => {
-          const rawIndex = props[TERMINAL_CONTEXT_CHIP_INDEX_ATTRIBUTE];
-          const index = rawIndex === undefined ? Number.NaN : Number.parseInt(rawIndex, 10);
-          const context = Number.isInteger(index) ? terminalContexts?.[index] : undefined;
-          if (!context) {
-            return null;
-          }
-          const tooltipText =
-            context.body.length > 0 ? `${context.header}\n${context.body}` : context.header;
-          return <TerminalContextInlineChip label={context.header} tooltipText={tooltipText} />;
-        },
-      } as unknown as Components),
-    }),
-    [
-      cwd,
-      diffThemeName,
-      isStreaming,
-      isUserVariant,
-      mentionReferences,
-      onImageExpand,
-      onTaskToggle,
-      resolvedTheme,
-      terminalContexts,
-    ],
-  );
+      // Custom elements emitted by the composer-chips remark plugin. React Markdown's
+      // public Components type only names HTML tags, so merge the runtime tag map after
+      // defining the standard element overrides instead of aliasing both tags to `span`.
+      ...customComponents,
+    };
+  }, [
+    cwd,
+    diffThemeName,
+    isStreaming,
+    isUserVariant,
+    mentionReferences,
+    onImageExpand,
+    onTaskToggle,
+    resolvedTheme,
+    terminalContexts,
+  ]);
 
   return (
     <div

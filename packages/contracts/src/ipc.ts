@@ -30,6 +30,8 @@ import type {
 import type {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitCloneRepositoryInput,
+  GitCloneRepositoryResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -51,6 +53,8 @@ import type {
   GitPullResult,
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
+  GitRenameBranchInput,
+  GitRenameBranchResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
@@ -544,6 +548,8 @@ export interface NativeApi {
     ) => Promise<GitCreateDetachedWorktreeResult>;
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
     createBranch: (input: GitCreateBranchInput) => Promise<void>;
+    renameBranch: (input: GitRenameBranchInput) => Promise<GitRenameBranchResult>;
+    cloneRepository: (input: GitCloneRepositoryInput) => Promise<GitCloneRepositoryResult>;
     checkout: (input: GitCheckoutInput) => Promise<void>;
     stashAndCheckout: (input: GitStashAndCheckoutInput) => Promise<void>;
     stashDrop: (input: GitStashDropInput) => Promise<void>;

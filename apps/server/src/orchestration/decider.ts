@@ -468,7 +468,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           targetRef: command.targetRef,
           targetResolvedCommit: null,
           createdFromCommit: null,
-          sourceKind: "new-branch",
+          sourceKind: command.sourceKind ?? "new-branch",
           sourceRef: command.sourceRef ?? command.targetRef,
           setupStatus: "pending",
           setupError: null,
@@ -530,6 +530,112 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [workspaceEvent, threadEvent];
     }
 
+    case "workspace.attach": {
+      const project = yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireWorkspaceAbsent({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existingPath = (readModel.workspaces ?? []).find(
+        (workspace) =>
+          workspace.projectId === command.projectId &&
+          workspace.deletedAt === null &&
+          workspace.path === command.path,
+      );
+      if (existingPath) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${existingPath.id}' already uses '${command.path}'.`,
+        });
+      }
+
+      const workspaceEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.created",
+        payload: {
+          workspaceId: command.workspaceId,
+          projectId: command.projectId,
+          repositoryIdentity: project.repositoryIdentity ?? null,
+          kind: "external",
+          state: "ready",
+          title: command.title,
+          path: command.path,
+          branch: command.branch,
+          headRef: command.headRef,
+          targetRef: command.targetRef,
+          targetResolvedCommit: command.headRef,
+          createdFromCommit: command.headRef,
+          sourceKind: command.sourceKind,
+          sourceRef: command.sourceRef,
+          setupStatus: "skipped",
+          setupError: null,
+          setupLogId: null,
+          lastKnownPr: command.lastKnownPr ?? null,
+          isPinned: false,
+          lifecycleGeneration: 0,
+          activeOperation: null,
+          lastFailure: null,
+          mutationRevision: 0,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+          archivedAt: null,
+          deletedAt: null,
+        },
+      };
+      const threadEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          workspaceId: command.workspaceId,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          envMode: "worktree",
+          branch: command.branch,
+          worktreePath: command.path,
+          associatedWorktreePath: command.path,
+          associatedWorktreeBranch: command.branch,
+          associatedWorktreeRef: command.headRef,
+          createBranchFlowCompleted: true,
+          isPinned: false,
+          parentThreadId: null,
+          subagentAgentId: null,
+          subagentNickname: null,
+          subagentRole: null,
+          forkSourceThreadId: null,
+          sidechatSourceThreadId: null,
+          lastKnownPr: command.lastKnownPr ?? null,
+          handoff: null,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [workspaceEvent, threadEvent];
+    }
+
     case "workspace.conversation.create": {
       const workspace = yield* requireWorkspace({
         readModel,
@@ -581,6 +687,42 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
+        },
+      };
+    }
+
+    case "workspace.meta.update": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (command.title === undefined && command.branch === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace metadata update for '${workspace.id}' did not include any changes.`,
+        });
+      }
+      if (command.branch !== undefined && workspace.state !== "ready") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${workspace.id}' cannot change branches while ${workspace.state}.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.updatedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.meta-updated",
+        payload: {
+          workspaceId: command.workspaceId,
+          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(command.branch !== undefined ? { branch: command.branch } : {}),
+          mutationRevision: workspace.mutationRevision + 1,
+          updatedAt: command.updatedAt,
         },
       };
     }

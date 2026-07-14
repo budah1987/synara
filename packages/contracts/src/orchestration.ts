@@ -673,6 +673,14 @@ export const WorktreeWorkspaceSetupStatus = Schema.Literals([
 ]);
 export type WorktreeWorkspaceSetupStatus = typeof WorktreeWorkspaceSetupStatus.Type;
 
+export const WorktreeWorkspaceSourceKind = Schema.Literals([
+  "new-branch",
+  "branch",
+  "pull-request",
+  "imported",
+]);
+export type WorktreeWorkspaceSourceKind = typeof WorktreeWorkspaceSourceKind.Type;
+
 export const WorktreeWorkspaceOperationKind = Schema.Literals([
   "provision",
   "setup",
@@ -713,7 +721,7 @@ export const OrchestrationWorktreeWorkspace = Schema.Struct({
   targetRef: TrimmedNonEmptyString,
   targetResolvedCommit: Schema.NullOr(TrimmedNonEmptyString),
   createdFromCommit: Schema.NullOr(TrimmedNonEmptyString),
-  sourceKind: Schema.Literals(["new-branch", "imported"]),
+  sourceKind: WorktreeWorkspaceSourceKind,
   sourceRef: Schema.NullOr(TrimmedNonEmptyString),
   setupStatus: WorktreeWorkspaceSetupStatus,
   setupError: Schema.NullOr(TrimmedNonEmptyString),
@@ -1034,7 +1042,30 @@ export const WorktreeWorkspaceCreateCommand = Schema.Struct({
   operationId: WorkspaceOperationId,
   title: TrimmedNonEmptyString,
   targetRef: TrimmedNonEmptyString,
+  sourceKind: Schema.optional(Schema.Literals(["new-branch", "branch"])),
   sourceRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  createdAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceAttachCommand = Schema.Struct({
+  type: Schema.Literal("workspace.attach"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  targetRef: TrimmedNonEmptyString,
+  sourceKind: Schema.Literals(["branch", "pull-request", "imported"]),
+  sourceRef: TrimmedNonEmptyString,
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
@@ -1055,6 +1086,15 @@ export const WorktreeWorkspaceConversationCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   createdAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceMetaUpdateCommand = Schema.Struct({
+  type: Schema.Literal("workspace.meta.update"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+  updatedAt: IsoDateTime,
 });
 
 const ThreadCreateCommand = Schema.Struct({
@@ -1446,7 +1486,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   WorktreeWorkspaceCreateCommand,
+  WorktreeWorkspaceAttachCommand,
   WorktreeWorkspaceConversationCreateCommand,
+  WorktreeWorkspaceMetaUpdateCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
@@ -1481,7 +1523,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   WorktreeWorkspaceCreateCommand,
+  WorktreeWorkspaceAttachCommand,
   WorktreeWorkspaceConversationCreateCommand,
+  WorktreeWorkspaceMetaUpdateCommand,
   ThreadCreateCommand,
   ThreadHandoffCreateCommand,
   ThreadForkCreateCommand,
@@ -1677,6 +1721,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.meta-updated",
   "project.deleted",
   "workspace.created",
+  "workspace.meta-updated",
   "workspace.ready",
   "workspace.operation-failed",
   "thread.created",
@@ -1768,7 +1813,7 @@ export const WorktreeWorkspaceCreatedPayload = Schema.Struct({
   targetRef: TrimmedNonEmptyString,
   targetResolvedCommit: Schema.NullOr(TrimmedNonEmptyString),
   createdFromCommit: Schema.NullOr(TrimmedNonEmptyString),
-  sourceKind: Schema.Literals(["new-branch", "imported"]),
+  sourceKind: WorktreeWorkspaceSourceKind,
   sourceRef: Schema.NullOr(TrimmedNonEmptyString),
   setupStatus: WorktreeWorkspaceSetupStatus,
   setupError: Schema.NullOr(TrimmedNonEmptyString),
@@ -1796,6 +1841,14 @@ export const WorktreeWorkspaceReadyPayload = Schema.Struct({
   createdFromCommit: TrimmedNonEmptyString,
   setupStatus: Schema.Literals(["succeeded", "skipped"]),
   completedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceMetaUpdatedPayload = Schema.Struct({
+  workspaceId: WorktreeWorkspaceId,
+  title: Schema.optional(TrimmedNonEmptyString),
+  branch: Schema.optional(TrimmedNonEmptyString),
+  mutationRevision: NonNegativeInt,
+  updatedAt: IsoDateTime,
 });
 
 export const WorktreeWorkspaceOperationFailedPayload = Schema.Struct({
@@ -2157,6 +2210,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("workspace.created"),
     payload: WorktreeWorkspaceCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("workspace.meta-updated"),
+    payload: WorktreeWorkspaceMetaUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

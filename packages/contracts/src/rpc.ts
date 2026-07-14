@@ -24,6 +24,8 @@ import { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./s
 import {
   GitCheckoutInput,
   GitActionProgressEvent,
+  GitCloneRepositoryInput,
+  GitCloneRepositoryResult,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
@@ -46,6 +48,8 @@ import {
   GitReadWorkingTreeDiffInput,
   GitReadWorkingTreeDiffResult,
   GitRemoveIndexLockInput,
+  GitRenameBranchInput,
+  GitRenameBranchResult,
   GitRemoveWorktreeInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
@@ -556,6 +560,18 @@ export const WsGitCreateBranchRpc = Rpc.make(WS_METHODS.gitCreateBranch, {
   error: WsRpcError,
 });
 
+export const WsGitRenameBranchRpc = Rpc.make(WS_METHODS.gitRenameBranch, {
+  payload: GitRenameBranchInput,
+  success: GitRenameBranchResult,
+  error: WsRpcError,
+});
+
+export const WsGitCloneRepositoryRpc = Rpc.make(WS_METHODS.gitCloneRepository, {
+  payload: GitCloneRepositoryInput,
+  success: GitCloneRepositoryResult,
+  error: WsRpcError,
+});
+
 export const WsGitCheckoutRpc = Rpc.make(WS_METHODS.gitCheckout, {
   payload: GitCheckoutInput,
   success: Schema.Void,
@@ -970,6 +986,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCreateDetachedWorktreeRpc,
   WsGitRemoveWorktreeRpc,
   WsGitCreateBranchRpc,
+  WsGitRenameBranchRpc,
+  WsGitCloneRepositoryRpc,
   WsGitCheckoutRpc,
   WsGitStashAndCheckoutRpc,
   WsGitStashDropRpc,

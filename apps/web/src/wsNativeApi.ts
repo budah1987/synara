@@ -568,6 +568,9 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.gitCreateDetachedWorktree, input),
       removeWorktree: (input) => transport.request(WS_METHODS.gitRemoveWorktree, input),
       createBranch: (input) => transport.request(WS_METHODS.gitCreateBranch, input),
+      renameBranch: (input) => transport.request(WS_METHODS.gitRenameBranch, input),
+      cloneRepository: (input) =>
+        transport.request(WS_METHODS.gitCloneRepository, input, { timeoutMs: null }),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
       stashAndCheckout: (input) => transport.request(WS_METHODS.gitStashAndCheckout, input),
       stashDrop: (input) => transport.request(WS_METHODS.gitStashDrop, input),

@@ -18,7 +18,38 @@ import { ServerConfig } from "../../config";
 import { GitCoreLive } from "../../git/Layers/GitCore";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
 import { WorktreeWorkspaceReactor } from "../Services/WorktreeWorkspaceReactor";
-import { WorktreeWorkspaceReactorLive } from "./WorktreeWorkspaceReactor";
+import {
+  resolveWorkspaceBranchProvisioning,
+  WorktreeWorkspaceReactorLive,
+} from "./WorktreeWorkspaceReactor";
+
+describe("resolveWorkspaceBranchProvisioning", () => {
+  it("checks out a free local branch without changing its identity", () => {
+    expect(
+      resolveWorkspaceBranchProvisioning({
+        sourceKind: "branch",
+        targetRef: "feature/existing",
+        resolvedCommit: "abc123",
+        generatedBranch: "synara/generated",
+        localBranchExists: true,
+        remotes: ["origin"],
+      }),
+    ).toEqual({ branch: "feature/existing", newBranch: undefined });
+  });
+
+  it("creates the matching local branch name for a remote branch", () => {
+    expect(
+      resolveWorkspaceBranchProvisioning({
+        sourceKind: "branch",
+        targetRef: "origin/feature/existing",
+        resolvedCommit: "abc123",
+        generatedBranch: "synara/generated",
+        localBranchExists: false,
+        remotes: ["origin"],
+      }),
+    ).toEqual({ branch: "origin/feature/existing", newBranch: "feature/existing" });
+  });
+});
 
 describe("WorktreeWorkspaceReactor", () => {
   it("creates one worktree, runs setup, and records a fenced completion", async () => {

@@ -3,7 +3,7 @@
 //          directories, center mode) so re-entering the editor view restores it.
 // Layer: Web UI state persistence
 
-import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import type { ProviderKind, ThreadId } from "@synara/contracts";
 import { isProviderKind } from "./providerOrdering";
 
 const EDITOR_VIEW_STATE_STORAGE_KEY = "synara.editor.viewStateByThreadId";
@@ -148,14 +148,12 @@ function readEditorRailChatTabsMap(): PersistedEditorRailChatTabsMap {
   }
 }
 
-export function readEditorRailChatTabs(
-  projectId: ProjectId,
-): ReadonlyArray<EditorRailChatTabSnapshot> {
-  return readEditorRailChatTabsMap()[projectId] ?? [];
+export function readEditorRailChatTabs(scopeKey: string): ReadonlyArray<EditorRailChatTabSnapshot> {
+  return readEditorRailChatTabsMap()[scopeKey] ?? [];
 }
 
 export function storeEditorRailChatTabs(
-  projectId: ProjectId,
+  scopeKey: string,
   tabs: ReadonlyArray<EditorRailChatTabSnapshot>,
 ): void {
   if (typeof window === "undefined") {
@@ -165,9 +163,9 @@ export function storeEditorRailChatTabs(
     const map = readEditorRailChatTabsMap();
     const normalizedTabs = normalizeEditorRailChatTabs(tabs);
     if (normalizedTabs.length === 0) {
-      delete map[projectId];
+      delete map[scopeKey];
     } else {
-      map[projectId] = normalizedTabs;
+      map[scopeKey] = normalizedTabs;
     }
     window.localStorage.setItem(EDITOR_RAIL_CHAT_TABS_STORAGE_KEY, JSON.stringify(map));
   } catch {

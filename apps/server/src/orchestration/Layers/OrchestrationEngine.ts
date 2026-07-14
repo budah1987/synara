@@ -74,6 +74,8 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateId: command.projectId,
       };
     case "workspace.create":
+    case "workspace.attach":
+    case "workspace.meta.update":
     case "workspace.import-legacy":
     case "workspace.provision.complete":
     case "workspace.operation.fail":

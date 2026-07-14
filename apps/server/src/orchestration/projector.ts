@@ -33,6 +33,7 @@ import {
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
   WorktreeWorkspaceCreatedPayload,
+  WorktreeWorkspaceMetaUpdatedPayload,
   WorktreeWorkspaceOperationFailedPayload,
   WorktreeWorkspaceReadyPayload,
   ThreadArchivedPayload,
@@ -430,6 +431,40 @@ export function projectEvent(
             : [...workspaces, workspace],
         };
       });
+
+    case "workspace.meta-updated":
+      return decodeForEvent(
+        WorktreeWorkspaceMetaUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const nextBranch = payload.branch;
+          return {
+            ...nextBase,
+            workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+              ...(payload.title !== undefined ? { title: payload.title } : {}),
+              ...(nextBranch !== undefined ? { branch: nextBranch } : {}),
+              mutationRevision: payload.mutationRevision,
+              updatedAt: payload.updatedAt,
+            }),
+            threads:
+              nextBranch === undefined
+                ? nextBase.threads
+                : nextBase.threads.map((thread) =>
+                    thread.workspaceId === payload.workspaceId
+                      ? {
+                          ...thread,
+                          branch: nextBranch,
+                          associatedWorktreeBranch: nextBranch,
+                          updatedAt: payload.updatedAt,
+                        }
+                      : thread,
+                  ),
+          };
+        }),
+      );
 
     case "workspace.ready":
       return decodeForEvent(

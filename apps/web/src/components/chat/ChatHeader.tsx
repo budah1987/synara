@@ -11,6 +11,7 @@ import {
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type WorktreeWorkspaceId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -123,6 +124,7 @@ interface ChatHeaderProps {
   // a project chat-history menu. Provided only by the editor workspace chat pane.
   editorChatControls?: {
     projectId: ProjectId;
+    workspaceId: WorktreeWorkspaceId | null;
     activeSurface: "chat" | "terminal";
     terminalAvailable: boolean;
     terminalHasRunningActivity: boolean;
@@ -151,6 +153,7 @@ type EditorRailChatTab = EditorRailChatTabSnapshot;
 // editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
   projectId: ProjectId;
+  workspaceId: WorktreeWorkspaceId | null;
   activeThreadId: ThreadId;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
@@ -160,10 +163,14 @@ function EditorChatHistoryMenu(props: {
   const historyThreads = useMemo(
     () =>
       sortThreadsForSidebar(
-        displayThreads.filter((thread) => thread.projectId === props.projectId),
+        displayThreads.filter((thread) =>
+          props.workspaceId
+            ? thread.workspaceId === props.workspaceId
+            : thread.projectId === props.projectId,
+        ),
         settings.sidebarThreadSortOrder,
       ).slice(0, EDITOR_CHAT_HISTORY_LIMIT),
-    [displayThreads, props.projectId, settings.sidebarThreadSortOrder],
+    [displayThreads, props.projectId, props.workspaceId, settings.sidebarThreadSortOrder],
   );
 
   return (
@@ -183,7 +190,11 @@ function EditorChatHistoryMenu(props: {
       />
       <ComposerPickerMenuPopup align="start" side="bottom" sideOffset={6} className="w-72 min-w-72">
         {historyThreads.length === 0 ? (
-          <MenuItem disabled>No chats in this project yet</MenuItem>
+          <MenuItem disabled>
+            {props.workspaceId
+              ? "No conversations in this workspace yet"
+              : "No chats in this project yet"}
+          </MenuItem>
         ) : (
           historyThreads.map((thread) => (
             <MenuItem
@@ -217,6 +228,7 @@ function EditorChatHistoryMenu(props: {
 
 function EditorRailTabs(props: {
   projectId: ProjectId;
+  workspaceId: WorktreeWorkspaceId | null;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
   activeProvider: ProviderKind;
@@ -231,8 +243,11 @@ function EditorRailTabs(props: {
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const { settings } = useAppSettings();
+  const tabScopeKey = props.workspaceId
+    ? `workspace:${props.workspaceId}`
+    : `project:${props.projectId}`;
   const [openChatTabs, setOpenChatTabs] = useState<ReadonlyArray<EditorRailChatTab>>(() => {
-    const storedTabs = readEditorRailChatTabs(props.projectId);
+    const storedTabs = readEditorRailChatTabs(tabScopeKey);
     return storedTabs.length > 0
       ? storedTabs
       : [
@@ -258,14 +273,14 @@ function EditorRailTabs(props: {
     (updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>) => {
       setOpenChatTabs((current) => {
         const next = updater(current);
-        storeEditorRailChatTabs(props.projectId, next);
+        storeEditorRailChatTabs(tabScopeKey, next);
         return next;
       });
     },
-    [props.projectId],
+    [tabScopeKey],
   );
   useEffect(() => {
-    const storedTabs = readEditorRailChatTabs(props.projectId);
+    const storedTabs = readEditorRailChatTabs(tabScopeKey);
     setOpenChatTabs(
       storedTabs.length > 0
         ? storedTabs
@@ -277,7 +292,7 @@ function EditorRailTabs(props: {
             },
           ],
     );
-  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, props.projectId]);
+  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, tabScopeKey]);
   useEffect(() => {
     if (props.terminalAvailable) {
       setTerminalTabOpen(true);
@@ -304,7 +319,11 @@ function EditorRailTabs(props: {
   }, [currentChatTab, props.activeSurface, setAndStoreOpenChatTabs]);
   const chatTabs = useMemo(() => {
     const sortedProjectThreads = sortThreadsForSidebar(
-      displayThreads.filter((thread) => thread.projectId === props.projectId),
+      displayThreads.filter((thread) =>
+        props.workspaceId
+          ? thread.workspaceId === props.workspaceId
+          : thread.projectId === props.projectId,
+      ),
       settings.sidebarThreadSortOrder,
     );
     const sidebarThreadById = new Map(
@@ -330,11 +349,12 @@ function EditorRailTabs(props: {
     props.activeThreadId,
     openChatTabs,
     props.projectId,
+    props.workspaceId,
     settings.sidebarThreadSortOrder,
   ]);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
-  const shouldShowTabs = tabCount > 1;
+  const shouldShowTabs = props.workspaceId !== null || tabCount > 1;
   const newTerminalTab = () => {
     setTerminalTabOpen(true);
     props.onNewTerminal();
@@ -412,6 +432,7 @@ function EditorRailTabs(props: {
         </Menu>
         <EditorChatHistoryMenu
           projectId={props.projectId}
+          workspaceId={props.workspaceId}
           activeThreadId={props.activeThreadId}
           onNavigateToThread={openChatTab}
         />
@@ -701,7 +722,9 @@ export const ChatHeader = memo(function ChatHeader({
               </div>
               {editorChatControls ? (
                 <EditorRailTabs
+                  key={editorChatControls.workspaceId ?? editorChatControls.projectId}
                   projectId={editorChatControls.projectId}
+                  workspaceId={editorChatControls.workspaceId}
                   activeThreadId={activeThreadId}
                   activeThreadTitle={activeThreadTitle}
                   activeProvider={activeProvider}

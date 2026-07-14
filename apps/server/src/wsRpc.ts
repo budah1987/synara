@@ -40,7 +40,8 @@ import {
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
-import { GitCore } from "./git/Services/GitCore";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
+import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
@@ -257,6 +258,7 @@ export const makeWsRpcLayer = () =>
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
       const git = yield* GitCore;
+      const gitHubCli = yield* GitHubCli;
       const gitManager = yield* GitManager;
       const gitStatusBroadcaster = yield* GitStatusBroadcaster;
       const keybindings = yield* Keybindings;
@@ -952,6 +954,98 @@ export const makeWsRpcLayer = () =>
           rpcEffect(
             git.createBranch(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
             "Failed to create branch",
+          ),
+        [WS_METHODS.gitRenameBranch]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const details = yield* git.statusDetails(input.cwd);
+              if (details.branch !== input.oldBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Workspace is on '${details.branch ?? "detached HEAD"}', not '${input.oldBranch}'. Refresh and try again.`,
+                  ),
+                );
+              }
+              const branches = yield* git.listBranches({ cwd: input.cwd });
+              const hasPublishedBranch = branches.branches.some(
+                (branch) => branch.isRemote === true && branch.name.endsWith(`/${input.oldBranch}`),
+              );
+              if (details.hasUpstream || hasPublishedBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    "Published branches cannot be renamed from Synara yet. Rename it on GitHub, then refresh the workspace.",
+                  ),
+                );
+              }
+              return yield* git
+                .renameBranch(input)
+                .pipe(Effect.tap(() => refreshGitStatus(input.cwd)));
+            }),
+            "Failed to rename branch",
+          ),
+        [WS_METHODS.gitCloneRepository]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const repository = yield* gitHubCli.getRepositoryCloneUrls({
+                cwd: config.homeDir,
+                repository: input.repository,
+              });
+              const segments = repository.nameWithOwner.split("/");
+              if (
+                segments.length !== 2 ||
+                segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment))
+              ) {
+                return yield* Effect.fail(new Error("GitHub returned an invalid repository name."));
+              }
+              const destination = path.join(config.repositoriesDir, ...segments);
+              const destinationExists = yield* fileSystem.exists(destination);
+              if (!destinationExists) {
+                yield* fileSystem.makeDirectory(path.dirname(destination), { recursive: true });
+                yield* gitHubCli.execute({
+                  cwd: config.homeDir,
+                  args: ["repo", "clone", repository.nameWithOwner, destination],
+                  timeoutMs: 120_000,
+                });
+              }
+              const branches = yield* git.listBranches({ cwd: destination });
+              if (!branches.isRepo) {
+                return yield* Effect.fail(
+                  new Error(
+                    `The managed destination already exists but is not a Git repository: ${destination}`,
+                  ),
+                );
+              }
+              if (destinationExists) {
+                const existingRepository = yield* resolveGitHubRepository(git, destination);
+                if (
+                  existingRepository.repository?.nameWithOwner.toLowerCase() !==
+                  repository.nameWithOwner.toLowerCase()
+                ) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `The managed destination belongs to a different repository: ${destination}`,
+                    ),
+                  );
+                }
+              }
+              const defaultBranch =
+                branches.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ??
+                branches.branches.find((branch) => !branch.isRemote && branch.current)?.name;
+              if (!defaultBranch) {
+                return yield* Effect.fail(
+                  new Error(
+                    "The repository was cloned, but its default branch could not be resolved.",
+                  ),
+                );
+              }
+              return {
+                path: destination,
+                nameWithOwner: repository.nameWithOwner,
+                defaultBranch,
+                reused: destinationExists,
+              };
+            }),
+            "Failed to clone GitHub repository",
           ),
         [WS_METHODS.gitCheckout]: (input) =>
           rpcEffect(

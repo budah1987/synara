@@ -35,6 +35,27 @@ function workspaceBranchName(workspace: OrchestrationWorktreeWorkspace): string 
   return `synara/${slug || "workspace"}-${String(workspace.id).slice(0, 8)}`;
 }
 
+export function resolveWorkspaceBranchProvisioning(input: {
+  sourceKind: OrchestrationWorktreeWorkspace["sourceKind"];
+  targetRef: string;
+  resolvedCommit: string;
+  generatedBranch: string;
+  localBranchExists: boolean;
+  remotes: readonly string[];
+}): { branch: string; newBranch: string | undefined } {
+  if (input.sourceKind !== "branch") {
+    return { branch: input.resolvedCommit, newBranch: input.generatedBranch };
+  }
+  if (input.localBranchExists) {
+    return { branch: input.targetRef, newBranch: undefined };
+  }
+  const remote = input.remotes.find((candidate) => input.targetRef.startsWith(`${candidate}/`));
+  return {
+    branch: input.targetRef,
+    newBranch: remote ? input.targetRef.slice(remote.length + 1) : input.targetRef,
+  };
+}
+
 function errorSummary(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   return (message.trim() || "Workspace provisioning failed").slice(0, 2_000);
@@ -236,10 +257,39 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
 
         stage = "create-worktree";
         yield* fileSystem.makeDirectory(path.dirname(worktreePath), { recursive: true });
+        let localBranchExists = false;
+        let remotes: readonly string[] = [];
+        if (workspace.sourceKind === "branch") {
+          const localBranch = yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.resolveLocalBranch",
+            cwd: project.workspaceRoot,
+            args: ["show-ref", "--verify", "--quiet", `refs/heads/${workspace.targetRef}`],
+            allowNonZeroExit: true,
+          });
+          localBranchExists = localBranch.code === 0;
+          if (!localBranchExists) {
+            remotes = (yield* git.execute({
+              operation: "WorktreeWorkspaceReactor.listRemotes",
+              cwd: project.workspaceRoot,
+              args: ["remote"],
+            })).stdout
+              .split("\n")
+              .map((remote) => remote.trim())
+              .filter(Boolean);
+          }
+        }
+        const { branch, newBranch } = resolveWorkspaceBranchProvisioning({
+          sourceKind: workspace.sourceKind,
+          targetRef: workspace.targetRef,
+          resolvedCommit,
+          generatedBranch,
+          localBranchExists,
+          remotes,
+        });
         const result = yield* git.createWorktree({
           cwd: project.workspaceRoot,
-          branch: resolvedCommit,
-          newBranch: generatedBranch,
+          branch,
+          newBranch,
           path: worktreePath,
         });
         createdPath = result.worktree.path;

@@ -8,6 +8,7 @@ import {
   WorktreeWorkspaceId,
   WorktreeWorkspaceKind,
   WorktreeWorkspaceSetupStatus,
+  WorktreeWorkspaceSourceKind,
   WorktreeWorkspaceState,
 } from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
@@ -28,7 +29,7 @@ export const ProjectionWorktreeWorkspace = Schema.Struct({
   targetRef: Schema.String,
   targetResolvedCommit: Schema.NullOr(Schema.String),
   createdFromCommit: Schema.NullOr(Schema.String),
-  sourceKind: Schema.Literals(["new-branch", "imported"]),
+  sourceKind: WorktreeWorkspaceSourceKind,
   sourceRef: Schema.NullOr(Schema.String),
   setupStatus: WorktreeWorkspaceSetupStatus,
   setupError: Schema.NullOr(Schema.String),

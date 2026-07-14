@@ -239,6 +239,18 @@ export const GitCreateBranchInput = Schema.Struct({
 });
 export type GitCreateBranchInput = typeof GitCreateBranchInput.Type;
 
+export const GitRenameBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  oldBranch: TrimmedNonEmptyStringSchema,
+  newBranch: TrimmedNonEmptyStringSchema,
+});
+export type GitRenameBranchInput = typeof GitRenameBranchInput.Type;
+
+export const GitCloneRepositoryInput = Schema.Struct({
+  repository: TrimmedNonEmptyStringSchema,
+});
+export type GitCloneRepositoryInput = typeof GitCloneRepositoryInput.Type;
+
 export const GitCheckoutInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -397,6 +409,19 @@ export const GitCreateDetachedWorktreeResult = Schema.Struct({
   worktree: GitDetachedWorktree,
 });
 export type GitCreateDetachedWorktreeResult = typeof GitCreateDetachedWorktreeResult.Type;
+
+export const GitRenameBranchResult = Schema.Struct({
+  branch: TrimmedNonEmptyStringSchema,
+});
+export type GitRenameBranchResult = typeof GitRenameBranchResult.Type;
+
+export const GitCloneRepositoryResult = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  nameWithOwner: TrimmedNonEmptyStringSchema,
+  defaultBranch: TrimmedNonEmptyStringSchema,
+  reused: Schema.Boolean,
+});
+export type GitCloneRepositoryResult = typeof GitCloneRepositoryResult.Type;
 
 export const GitStashInfoResult = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,

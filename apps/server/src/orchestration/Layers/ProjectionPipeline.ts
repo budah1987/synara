@@ -180,6 +180,7 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
 
 const WORKSPACE_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "workspace.created",
+  "workspace.meta-updated",
   "workspace.ready",
   "workspace.operation-failed",
 ]);
@@ -682,6 +683,37 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             deletedAt: event.payload.deletedAt,
           });
           return;
+
+        case "workspace.meta-updated": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
+            ...(event.payload.branch !== undefined ? { branch: event.payload.branch } : {}),
+            mutationRevision: event.payload.mutationRevision,
+            updatedAt: event.payload.updatedAt,
+          });
+          const nextBranch = event.payload.branch;
+          if (nextBranch === undefined) return;
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                branch: nextBranch,
+                associatedWorktreeBranch: nextBranch,
+                updatedAt: event.payload.updatedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
 
         case "workspace.ready": {
           const existing = yield* projectionWorktreeWorkspaceRepository.getById({

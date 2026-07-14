@@ -759,7 +759,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
 
 function isProtocolError(
   value: unknown,
-): value is { code: number; message: string; data?: unknown } {
+): value is Record<string, unknown> & { code: number; message: string; data?: unknown } {
   return (
     typeof value === "object" &&
     value !== null &&

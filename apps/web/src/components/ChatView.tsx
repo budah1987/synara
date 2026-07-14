@@ -322,7 +322,10 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { resolveTerminalNewAction } from "../lib/terminalNewAction";
-import { waitForManagedWorkspaceReady } from "../lib/managedWorkspace";
+import {
+  waitForManagedWorkspaceReady,
+  waitForWorkspaceConversationSnapshot,
+} from "../lib/managedWorkspace";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { compareProvidersByOrder } from "../providerOrdering";
 import {
@@ -1098,6 +1101,9 @@ export default function ChatView({
 }: ChatViewProps) {
   const markThreadVisited = useStore((store) => store.markThreadVisited);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
   const workspaceProtocolVersion = useStore((store) => store.workspaceProtocolVersion ?? 1);
@@ -10042,6 +10048,39 @@ export default function ChatView({
       search: (previous) => ({ ...stripDiffSearchParams(previous), view: "editor" }),
     });
   }, [activeProjectIdForNewChat, handleNewThread]);
+  const onNewWorkspaceChat = useCallback(async () => {
+    if (!activeThread?.workspaceId) return;
+    const api = readNativeApi();
+    if (!api) return;
+    try {
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId);
+      const nextThreadId = newThreadId();
+      await api.orchestration.dispatchCommand({
+        type: "workspace.conversation.create",
+        commandId: newCommandId(),
+        workspaceId,
+        threadId: nextThreadId,
+        title: "New conversation",
+        modelSelection: activeThread.modelSelection,
+        runtimeMode: activeThread.runtimeMode,
+        interactionMode: activeThread.interactionMode,
+        createdAt: new Date().toISOString(),
+      });
+      const snapshot = await waitForWorkspaceConversationSnapshot({
+        workspaceId,
+        threadId: nextThreadId,
+        loadSnapshot: () => api.orchestration.getWorkspaceShellSnapshot(),
+      });
+      syncServerWorkspaceShellSnapshot(snapshot);
+      onNavigateToThread(nextThreadId);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add conversation",
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
+    }
+  }, [activeThread, onNavigateToThread, syncServerWorkspaceShellSnapshot]);
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);
@@ -11006,13 +11045,18 @@ export default function ChatView({
                 : null
           }
           editorChatControls={
-            isEditorRail && activeProject
+            (isEditorRail || activeThread.workspaceId !== null) && activeProject
               ? {
                   projectId: activeProject.id,
+                  workspaceId: activeThread.workspaceId
+                    ? WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId)
+                    : null,
                   activeSurface: terminalWorkspaceTerminalTabActive ? "terminal" : "chat",
                   terminalAvailable: terminalState.terminalOpen,
                   terminalHasRunningActivity: terminalState.runningTerminalIds.length > 0,
-                  onNewChat: onNewEditorChat,
+                  onNewChat: activeThread.workspaceId
+                    ? () => void onNewWorkspaceChat()
+                    : onNewEditorChat,
                   onNewTerminal: onOpenEditorTerminal,
                   onOpenChat: onOpenEditorChat,
                   onOpenTerminal: onOpenEditorTerminal,

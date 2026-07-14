@@ -136,6 +136,68 @@ describe("worktree workspace commands", () => {
     expect(event.payload).toMatchObject({ workspaceId: "workspace-sibling" });
   });
 
+  it("attaches an existing pull-request worktree and updates its display metadata", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const attached = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.attach",
+          commandId: CommandId.makeUnsafe("workspace-attach-pr"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr"),
+          threadId: ThreadId.makeUnsafe("workspace-pr-thread"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          title: "Review checkout",
+          path: "/tmp/workspace-pr",
+          branch: "feature/review",
+          headRef: null,
+          targetRef: "main",
+          sourceKind: "pull-request",
+          sourceRef: "https://github.com/example/repo/pull/42",
+          lastKnownPr: {
+            number: 42,
+            title: "Review checkout",
+            url: "https://github.com/example/repo/pull/42",
+            baseBranch: "main",
+            headBranch: "feature/review",
+            state: "open",
+          },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    const readModel = await apply(initial, Array.isArray(attached) ? attached : [attached]);
+    const renamed = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.meta.update",
+          commandId: CommandId.makeUnsafe("workspace-rename"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr"),
+          title: "Shipping details",
+          branch: "feature/shipping-details",
+          updatedAt: now,
+        },
+      }),
+    );
+    const finalModel = await apply(readModel, Array.isArray(renamed) ? renamed : [renamed]);
+
+    expect(finalModel.workspaces?.[0]).toMatchObject({
+      title: "Shipping details",
+      branch: "feature/shipping-details",
+      sourceKind: "pull-request",
+      mutationRevision: 1,
+    });
+    expect(finalModel.threads[0]).toMatchObject({
+      workspaceId: "workspace-pr",
+      branch: "feature/shipping-details",
+    });
+  });
+
   it("rejects a stale provisioning completion generation", async () => {
     const now = new Date().toISOString();
     const initial = await repositoryProject(now);
