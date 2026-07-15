@@ -935,6 +935,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
+        [WS_METHODS.gitListPullRequests]: (input) =>
+          rpcEffect(gitManager.listPullRequests(input), "Failed to list pull requests"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
             git.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),

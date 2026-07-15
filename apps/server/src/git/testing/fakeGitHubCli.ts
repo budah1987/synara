@@ -358,6 +358,38 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
       listPullRequests: (input) =>
         listPullRequestsWithState(input, { state: "all", defaultLimit: 20 }),
+      listWorkspacePullRequests: (input) => {
+        const state =
+          input.filter === "reviewing"
+            ? "open"
+            : input.filter === "open" || input.filter === "closed" || input.filter === "merged"
+              ? input.filter
+              : "all";
+        const filterArgs =
+          input.filter === "reviewing"
+            ? ["--search", "review-requested:@me"]
+            : input.filter === "authored"
+              ? ["--author", "@me"]
+              : [];
+        return execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "list",
+            "--state",
+            state,
+            ...filterArgs,
+            "--limit",
+            String(input.limit ?? 1_000),
+            "--json",
+            PULL_REQUEST_SUMMARY_JSON_FIELDS,
+          ],
+        }).pipe(
+          Effect.flatMap((result) =>
+            decodePullRequestListJson(result.stdout, "listWorkspacePullRequests"),
+          ),
+        );
+      },
       createPullRequest: (input) =>
         execute({
           cwd: input.cwd,

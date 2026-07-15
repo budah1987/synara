@@ -377,6 +377,52 @@ const GitManagerTestLayer = GitCoreLive.pipe(
 );
 
 it.layer(GitManagerTestLayer)("GitManager", (it) => {
+  it.effect("lists pull requests for the workspace picker", () =>
+    Effect.gen(function* () {
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            JSON.stringify([
+              {
+                number: 42,
+                title: "Review workspace picker",
+                url: "https://github.com/example-org/sample-repo/pull/42",
+                baseRefName: "main",
+                headRefName: "feature/workspace-picker",
+                state: "OPEN",
+                isDraft: false,
+                additions: 47,
+                deletions: 19,
+                updatedAt: "2026-07-14T12:00:00Z",
+                author: { login: "octocat" },
+              },
+            ]),
+          ],
+        },
+      });
+
+      const result = yield* manager.listPullRequests({ cwd: "/repo", filter: "reviewing" });
+
+      expect(result.pullRequests).toEqual([
+        {
+          number: 42,
+          title: "Review workspace picker",
+          url: "https://github.com/example-org/sample-repo/pull/42",
+          baseBranch: "main",
+          headBranch: "feature/workspace-picker",
+          state: "open",
+          isDraft: false,
+          authorLogin: "octocat",
+          authorAvatarUrl: "https://github.com/octocat.png?size=48",
+          updatedAt: "2026-07-14T12:00:00Z",
+          additions: 47,
+          deletions: 19,
+        },
+      ]);
+      expect(ghCalls[0]).toContain("--search review-requested:@me");
+    }),
+  );
+
   it.effect("status includes PR metadata when branch already has an open PR", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -482,7 +528,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           changedFiles: null,
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt,author",
         );
       }),
     30_000,

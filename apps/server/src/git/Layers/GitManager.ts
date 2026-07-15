@@ -1408,6 +1408,32 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
+  const listPullRequests: GitManagerShape["listPullRequests"] = Effect.fnUntraced(
+    function* (input) {
+      const pullRequests = yield* gitHubCli.listWorkspacePullRequests({
+        cwd: input.cwd,
+        filter: input.filter,
+      });
+
+      return {
+        pullRequests: pullRequests.map((pullRequest) => ({
+          number: pullRequest.number,
+          title: pullRequest.title,
+          url: pullRequest.url,
+          baseBranch: pullRequest.baseRefName,
+          headBranch: pullRequest.headRefName,
+          state: pullRequest.state ?? "open",
+          isDraft: pullRequest.isDraft ?? false,
+          authorLogin: pullRequest.authorLogin ?? null,
+          authorAvatarUrl: pullRequest.authorAvatarUrl ?? null,
+          updatedAt: pullRequest.updatedAt ?? null,
+          additions: pullRequest.additions ?? null,
+          deletions: pullRequest.deletions ?? null,
+        })),
+      };
+    },
+  );
+
   const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
     function* (input) {
       const reference = normalizePullRequestReference(input.reference);
@@ -2760,6 +2786,7 @@ The local stash entry was kept for recovery.`,
     status,
     readWorkingTreeDiff,
     summarizeDiff,
+    listPullRequests,
     resolvePullRequest,
     pullRequestSnapshot,
     preparePullRequestThread,

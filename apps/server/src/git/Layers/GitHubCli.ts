@@ -5,6 +5,7 @@ import {
   type GitHubAccountSelection,
   type GitHubAccountSummary,
   type GitHubRepositorySummary,
+  type GitPullRequestListFilter,
   type GitPullRequestCheck,
   type GitPullRequestCheckStatus,
   type GitPullRequestComment,
@@ -37,6 +38,7 @@ import {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
 const GITHUB_HOST = "github.com";
+const WORKSPACE_PULL_REQUEST_LIMIT = 1_000;
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,additions,deletions,updatedAt,createdAt,reviewDecision,reviewRequests,labels,mergedAt,mergeable";
@@ -174,6 +176,13 @@ const RawGitHubPullRequestSchema = Schema.Struct({
     ),
   ),
   updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
 });
 
 const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
@@ -429,6 +438,15 @@ function normalizePullRequestSummary(
     (typeof headRepositoryNameWithOwner === "string" && headRepositoryNameWithOwner.includes("/")
       ? (headRepositoryNameWithOwner.split("/")[0] ?? null)
       : null);
+  const authorLogin = raw.author?.login?.trim() || null;
+  const authorAvatarUrl = (() => {
+    if (!authorLogin) return null;
+    try {
+      return `${new URL(raw.url).origin}/${encodeURIComponent(authorLogin)}.png?size=48`;
+    } catch {
+      return null;
+    }
+  })();
   return {
     number: raw.number,
     title: raw.title,
@@ -442,6 +460,8 @@ function normalizePullRequestSummary(
     deletions: normalizeDiffCount(raw.deletions),
     changedFiles: normalizeDiffCount(raw.changedFiles),
     updatedAt: raw.updatedAt?.trim() || null,
+    ...(authorLogin ? { authorLogin } : {}),
+    ...(authorAvatarUrl ? { authorAvatarUrl } : {}),
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),
@@ -762,13 +782,14 @@ function decodeGitHubJson<S extends Schema.Top>(
   operation:
     | "listOpenPullRequests"
     | "listPullRequests"
+    | "listRepositoryPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
     | "listAccounts"
     | "listRepositories"
     | "getPullRequestWithChecks"
     | "getPullRequestReviewComments"
-    | "listRepositoryPullRequests"
+    | "listWorkspacePullRequests"
     | "getPullRequestDetail"
     | "getPullRequestListItem"
     | "listReviewRequestedPullRequestNumbers"
@@ -798,7 +819,10 @@ const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestS
  */
 export function decodePullRequestListJson(
   raw: string,
-  operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
+  operation:
+    | "listOpenPullRequests"
+    | "listPullRequests"
+    | "listWorkspacePullRequests" = "listPullRequests",
 ): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
@@ -1094,6 +1118,49 @@ const makeGitHubCli = Effect.sync(() => {
     }).pipe(
       Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
     );
+
+  const listWorkspacePullRequests = (input: {
+    readonly cwd: string;
+    readonly filter: GitPullRequestListFilter;
+    readonly limit?: number;
+  }) => {
+    const state =
+      input.filter === "reviewing"
+        ? "open"
+        : input.filter === "open" || input.filter === "closed" || input.filter === "merged"
+          ? input.filter
+          : "all";
+    const filterArgs =
+      input.filter === "reviewing"
+        ? ["--search", "review-requested:@me"]
+        : input.filter === "authored"
+          ? ["--author", "@me"]
+          : [];
+
+    return execute({
+      cwd: input.cwd,
+      args: [
+        "pr",
+        "list",
+        "--state",
+        state,
+        ...filterArgs,
+        "--limit",
+        String(input.limit ?? WORKSPACE_PULL_REQUEST_LIMIT),
+        "--json",
+        PULL_REQUEST_SUMMARY_JSON_FIELDS,
+      ],
+    }).pipe(
+      Effect.flatMap((result) =>
+        decodePullRequestListJson(result.stdout, "listWorkspacePullRequests"),
+      ),
+      Effect.map((pullRequests) =>
+        [...pullRequests].sort((left, right) =>
+          (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+        ),
+      ),
+    );
+  };
 
   const service = {
     execute,
@@ -1399,6 +1466,7 @@ const makeGitHubCli = Effect.sync(() => {
         defaultLimit: 20,
         operation: "listPullRequests",
       }),
+    listWorkspacePullRequests,
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,

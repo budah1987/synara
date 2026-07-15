@@ -185,6 +185,78 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("lists workspace pull requests with every picker filter", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValue({
+        stdout: JSON.stringify([
+          {
+            number: 9,
+            title: "Older pull request",
+            url: "https://github.com/o/r/pull/9",
+            baseRefName: "main",
+            headRefName: "feature/older",
+            state: "CLOSED",
+            additions: 4,
+            deletions: 2,
+            updatedAt: "2026-07-01T08:00:00Z",
+            author: { login: "octocat" },
+          },
+          {
+            number: 10,
+            title: "Newer pull request",
+            url: "https://github.com/o/r/pull/10",
+            baseRefName: "main",
+            headRefName: "feature/newer",
+            state: "OPEN",
+            additions: 12,
+            deletions: 3,
+            updatedAt: "2026-07-14T08:00:00Z",
+            author: { login: "hubot" },
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const gh = yield* GitHubCli;
+      const filters = ["all", "reviewing", "authored", "open", "closed", "merged"] as const;
+      for (const filter of filters) {
+        const result = yield* gh.listWorkspacePullRequests({ cwd: "/repo", filter });
+        assert.equal(result[0]?.number, 10);
+      }
+
+      expect(
+        yield* gh.listWorkspacePullRequests({ cwd: "/repo", filter: "open", limit: 25 }),
+      ).toEqual([
+        expect.objectContaining({
+          number: 10,
+          authorLogin: "hubot",
+          authorAvatarUrl: "https://github.com/hubot.png?size=48",
+        }),
+        expect.objectContaining({ number: 9, authorLogin: "octocat" }),
+      ]);
+
+      const expectedFilterArguments = [
+        ["--state", "all"],
+        ["--state", "open", "--search", "review-requested:@me"],
+        ["--state", "all", "--author", "@me"],
+        ["--state", "open"],
+        ["--state", "closed"],
+        ["--state", "merged"],
+      ];
+      for (const [index, expectedArguments] of expectedFilterArguments.entries()) {
+        expect(mockedRunProcess.mock.calls[index]?.[1]).toEqual(
+          expect.arrayContaining(expectedArguments),
+        );
+      }
+      expect(mockedRunProcess.mock.calls[6]?.[1]).toEqual(
+        expect.arrayContaining(["--state", "open", "--limit", "25"]),
+      );
+    }),
+  );
+
   it.effect("skips malformed list entries instead of hiding the healthy ones", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

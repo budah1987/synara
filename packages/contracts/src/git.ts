@@ -44,6 +44,15 @@ const GitPrStepStatus = Schema.Literals(["created", "opened_existing", "skipped_
 const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
+export const GitPullRequestListFilter = Schema.Literals([
+  "all",
+  "reviewing",
+  "authored",
+  "open",
+  "closed",
+  "merged",
+]);
+export type GitPullRequestListFilter = typeof GitPullRequestListFilter.Type;
 // GitHub's mergeability is eventually consistent: "unknown" is a real transient state
 // while GitHub recomputes after a push, not a decode fallback to branch on.
 export const GitPullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
@@ -86,6 +95,22 @@ const GitResolvedPullRequest = Schema.Struct({
   changedFiles: Schema.NullOr(NonNegativeInt),
 });
 export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
+
+export const GitPullRequestListItem = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  url: TrimmedNonEmptyStringSchema,
+  baseBranch: TrimmedNonEmptyStringSchema,
+  headBranch: TrimmedNonEmptyStringSchema,
+  state: GitPullRequestState,
+  isDraft: Schema.Boolean,
+  authorLogin: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  authorAvatarUrl: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  updatedAt: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+});
+export type GitPullRequestListItem = typeof GitPullRequestListItem.Type;
 
 // Normalized CI check state combining GitHub CheckRun conclusions and commit status states.
 export const GitPullRequestCheckStatus = Schema.Literals([
@@ -176,6 +201,12 @@ export const GitListBranchesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
 export type GitListBranchesInput = typeof GitListBranchesInput.Type;
+
+export const GitListPullRequestsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  filter: GitPullRequestListFilter,
+});
+export type GitListPullRequestsInput = typeof GitListPullRequestsInput.Type;
 
 export const GitCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
@@ -415,6 +446,11 @@ export const GitListBranchesResult = Schema.Struct({
   hasOriginRemote: Schema.Boolean,
 });
 export type GitListBranchesResult = typeof GitListBranchesResult.Type;
+
+export const GitListPullRequestsResult = Schema.Struct({
+  pullRequests: Schema.Array(GitPullRequestListItem),
+});
+export type GitListPullRequestsResult = typeof GitListPullRequestsResult.Type;
 
 export const GitCreateWorktreeResult = Schema.Struct({
   worktree: GitWorktree,
