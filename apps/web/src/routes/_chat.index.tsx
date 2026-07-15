@@ -10,19 +10,26 @@ import {
   RestoreOrCreateChatRoute,
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
+import { SplashScreen } from "../components/SplashScreen";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import { resolveRestorableThreadRoute } from "../chatRouteRestore";
+import {
+  collectKnownThreadIds,
+  resolveRestorableThreadRouteWithFallback,
+} from "../chatRouteRestore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { collectStudioProjectIds } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspaceStore } from "../workspaceStore";
+import { useRecentViewsStore } from "../recentViewsStore";
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const recentViews = useRecentViewsStore((state) => state.recentViews);
+  const recentViewsHydrated = useRecentViewsStore((state) => state.hasHydrated);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
@@ -35,6 +42,20 @@ function ChatIndexRouteView() {
   const studioProjectIds = useMemo(
     () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
+  const recentThreadRoutes = useMemo(
+    () =>
+      recentViews.flatMap((view) =>
+        view.kind === "thread"
+          ? [
+              {
+                threadId: view.threadId,
+                ...(view.splitViewId ? { splitViewId: view.splitViewId } : {}),
+              },
+            ]
+          : [],
+      ),
+    [recentViews],
   );
   // Fresh unsent chats have a route id but no persisted sidebar summary yet, so the thread-id
   // filter above never matches them — mirrors the /studio landing's draft handling (and
@@ -58,32 +79,58 @@ function ChatIndexRouteView() {
   }, [draftThreadsByThreadId, studioProjectIds]);
   const resolveRestoreRoute = useCallback<RestoreRouteResolver>(
     ({ availableSplitViewIds }) => {
-      const availableThreadIds = new Set<string>(
-        threadIds.filter((threadId) => {
-          // Fail closed: a thread we can't classify is not restorable from "/". Summaries are
-          // built from the same snapshot as threadIds, so this only ever excludes a thread if
-          // that invariant breaks — and then a fresh draft beats restoring into the wrong
-          // segment.
-          const summary = sidebarThreadSummaryById[threadId];
-          return summary !== undefined && !studioProjectIds.has(summary.projectId);
-        }),
-      );
+      const classifiedThreadIds = threadIds.filter((threadId) => {
+        // Fail closed: a thread we can't classify is not restorable from "/". Summaries are
+        // normally built from the same snapshot as threadIds.
+        const summary = sidebarThreadSummaryById[threadId];
+        return summary !== undefined && !studioProjectIds.has(summary.projectId);
+      });
+      const workspaceConversationIds = Object.values(sidebarThreadSummaryById)
+        .filter(
+          (summary): summary is NonNullable<typeof summary> =>
+            summary !== undefined && !studioProjectIds.has(summary.projectId),
+        )
+        .map((summary) => summary.id);
+      const availableThreadIds = collectKnownThreadIds({
+        threadIds: classifiedThreadIds,
+        sidebarThreadSummaryIds: workspaceConversationIds,
+      });
       for (const draftThreadId of nonStudioDraftThreadIds) {
         availableThreadIds.add(draftThreadId);
       }
-      return resolveRestorableThreadRoute({
+      return resolveRestorableThreadRouteWithFallback({
         lastThreadRoute: readSidebarUiState().lastThreadRoute,
+        fallbackRoutes: recentThreadRoutes,
         availableThreadIds,
         availableSplitViewIds,
       });
     },
-    [nonStudioDraftThreadIds, sidebarThreadSummaryById, studioProjectIds, threadIds],
+    [
+      nonStudioDraftThreadIds,
+      recentThreadRoutes,
+      sidebarThreadSummaryById,
+      studioProjectIds,
+      threadIds,
+    ],
   );
+  const shouldRecoverUnresolvedRememberedRoute = useCallback(
+    (lastThreadRoute: { threadId: string }) => {
+      const summary = sidebarThreadSummaryById[lastThreadRoute.threadId];
+      return summary === undefined || !studioProjectIds.has(summary.projectId);
+    },
+    [sidebarThreadSummaryById, studioProjectIds],
+  );
+
+  if (!recentViewsHydrated) {
+    return <SplashScreen />;
+  }
 
   return (
     <RestoreOrCreateChatRoute
       resolveRestoreRoute={resolveRestoreRoute}
       createFreshChat={createFreshChat}
+      fallbackRestoreRoute={recentThreadRoutes[0] ?? null}
+      shouldRecoverUnresolvedRememberedRoute={shouldRecoverUnresolvedRememberedRoute}
     />
   );
 }

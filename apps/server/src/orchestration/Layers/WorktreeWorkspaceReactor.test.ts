@@ -28,8 +28,8 @@ describe("resolveWorkspaceBranchProvisioning", () => {
     expect(
       resolveWorkspaceBranchProvisioning({
         sourceKind: "branch",
-        targetRef: "feature/existing",
-        resolvedCommit: "abc123",
+        sourceRef: "feature/existing",
+        sourceCommit: "abc123",
         generatedBranch: "synara/generated",
         localBranchExists: true,
         remotes: ["origin"],
@@ -41,8 +41,8 @@ describe("resolveWorkspaceBranchProvisioning", () => {
     expect(
       resolveWorkspaceBranchProvisioning({
         sourceKind: "branch",
-        targetRef: "origin/feature/existing",
-        resolvedCommit: "abc123",
+        sourceRef: "origin/feature/existing",
+        sourceCommit: "abc123",
         generatedBranch: "synara/generated",
         localBranchExists: false,
         remotes: ["origin"],
@@ -192,6 +192,147 @@ describe("WorktreeWorkspaceReactor", () => {
           encoding: "utf8",
         }).match(/^worktree /gm),
       ).toHaveLength(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks out an existing branch while keeping the default branch as its target", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-existing-branch-reactor-"));
+    try {
+      const repository = join(root, "repository");
+      execFileSync("git", ["init", "-b", "main", repository]);
+      execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", repository, "config", "user.name", "Synara Test"]);
+      execFileSync("sh", ["-c", "printf base > fixture.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "base"]);
+      const targetHead = execFileSync("git", ["-C", repository, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      execFileSync("git", ["-C", repository, "checkout", "-b", "feature/existing"]);
+      execFileSync("sh", ["-c", "printf feature > feature.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "feature.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "feature"]);
+      const sourceHead = execFileSync("git", ["-C", repository, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      execFileSync("git", ["-C", repository, "checkout", "main"]);
+
+      const now = new Date().toISOString();
+      const projectId = ProjectId.makeUnsafe("project-existing-branch");
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-existing-branch");
+      const operationId = WorkspaceOperationId.makeUnsafe("operation-existing-branch");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project",
+            title: "Existing branch project",
+            workspaceRoot: repository,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: false,
+            repositoryIdentity: repository,
+            defaultTargetRef: "main",
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        workspaces: [
+          {
+            id: workspaceId,
+            projectId,
+            repositoryIdentity: repository,
+            kind: "managed",
+            state: "provisioning",
+            title: "Existing branch workspace",
+            path: null,
+            branch: null,
+            headRef: null,
+            targetRef: "main",
+            targetResolvedCommit: null,
+            createdFromCommit: null,
+            sourceKind: "branch",
+            sourceRef: "feature/existing",
+            setupStatus: "pending",
+            setupError: null,
+            setupLogId: null,
+            lastKnownPr: null,
+            isPinned: false,
+            lifecycleGeneration: 1,
+            activeOperation: {
+              id: operationId,
+              generation: 1,
+              kind: "provision",
+              stage: "intent-recorded",
+              startedAt: now,
+            },
+            lastFailure: null,
+            mutationRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        ],
+        threads: [],
+        updatedAt: now,
+      };
+      const commands: OrchestrationCommand[] = [];
+      const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        getReadModel: () => Effect.succeed(readModel),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length + 1 };
+          }),
+        repairState: () => Effect.succeed(readModel),
+        refreshCommandReadModel: () => Effect.succeed(readModel),
+        streamDomainEvents: Stream.empty,
+      });
+      const configLayer = ServerConfig.layerTest(repository, root);
+      const gitLayer = GitCoreLive.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(NodeServices.layer),
+      );
+      const layer = WorktreeWorkspaceReactorLive.pipe(
+        Layer.provideMerge(engineLayer),
+        Layer.provideMerge(gitLayer),
+        Layer.provideMerge(configLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const reactor = yield* WorktreeWorkspaceReactor;
+            yield* reactor.start;
+            for (let attempt = 0; attempt < 80 && commands.length === 0; attempt += 1) {
+              yield* Effect.sleep(25);
+            }
+          }),
+        ).pipe(Effect.provide(layer)),
+      );
+
+      const completion = commands.find(
+        (command) => command.type === "workspace.provision.complete",
+      );
+      expect(completion).toMatchObject({
+        workspaceId,
+        operationId,
+        branch: "feature/existing",
+        targetResolvedCommit: targetHead,
+        createdFromCommit: sourceHead,
+        setupStatus: "skipped",
+      });
+      if (!completion || completion.type !== "workspace.provision.complete") {
+        throw new Error("Expected workspace completion command");
+      }
+      expect(existsSync(join(completion.path, "feature.txt"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

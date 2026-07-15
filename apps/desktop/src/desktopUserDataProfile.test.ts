@@ -35,6 +35,16 @@ describe("desktopUserDataProfile", () => {
     );
   });
 
+  it("honors an explicit Electron user-data override", () => {
+    expect(
+      resolveDesktopUserDataPath({
+        appDataBase: "/Users/tester/Library/Application Support",
+        isDevelopment: false,
+        overridePath: "/tmp/synara-preview-profile",
+      }),
+    ).toBe("/tmp/synara-preview-profile");
+  });
+
   it("uses XDG_CONFIG_HOME on Linux when available", () => {
     expect(
       resolveDesktopAppDataBase({

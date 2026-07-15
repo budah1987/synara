@@ -1572,7 +1572,11 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  return resolveDesktopUserDataPath({
+    appDataBase,
+    isDevelopment,
+    overridePath: app.commandLine.getSwitchValue("user-data-dir"),
+  });
 }
 
 function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {

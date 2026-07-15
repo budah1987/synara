@@ -37,22 +37,22 @@ function workspaceBranchName(workspace: OrchestrationWorktreeWorkspace): string 
 
 export function resolveWorkspaceBranchProvisioning(input: {
   sourceKind: OrchestrationWorktreeWorkspace["sourceKind"];
-  targetRef: string;
-  resolvedCommit: string;
+  sourceRef: string;
+  sourceCommit: string;
   generatedBranch: string;
   localBranchExists: boolean;
   remotes: readonly string[];
 }): { branch: string; newBranch: string | undefined } {
   if (input.sourceKind !== "branch") {
-    return { branch: input.resolvedCommit, newBranch: input.generatedBranch };
+    return { branch: input.sourceCommit, newBranch: input.generatedBranch };
   }
   if (input.localBranchExists) {
-    return { branch: input.targetRef, newBranch: undefined };
+    return { branch: input.sourceRef, newBranch: undefined };
   }
-  const remote = input.remotes.find((candidate) => input.targetRef.startsWith(`${candidate}/`));
+  const remote = input.remotes.find((candidate) => input.sourceRef.startsWith(`${candidate}/`));
   return {
-    branch: input.targetRef,
-    newBranch: remote ? input.targetRef.slice(remote.length + 1) : input.targetRef,
+    branch: input.sourceRef,
+    newBranch: remote ? input.sourceRef.slice(remote.length + 1) : input.sourceRef,
   };
 }
 
@@ -194,7 +194,12 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     let createdPath: string | null = null;
     let createdBranch: string | null = null;
     let createdHead: string | null = null;
-    let resolvedCommit: string | null = null;
+    let targetResolvedCommit: string | null = null;
+    let createdFromCommit: string | null = null;
+    const sourceRef =
+      workspace.sourceKind === "branch"
+        ? (workspace.sourceRef ?? workspace.targetRef)
+        : workspace.targetRef;
 
     const fail = (cause: unknown) =>
       orchestrationEngine
@@ -211,8 +216,8 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           path: createdPath,
           branch: createdBranch,
           headRef: createdHead,
-          targetResolvedCommit: resolvedCommit,
-          createdFromCommit: resolvedCommit,
+          targetResolvedCommit,
+          createdFromCommit,
           failedAt: new Date().toISOString(),
         })
         .pipe(
@@ -226,6 +231,16 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         );
 
     yield* Effect.gen(function* () {
+      stage = "resolve-target";
+      targetResolvedCommit = (yield* git.execute({
+        operation: "WorktreeWorkspaceReactor.resolveTarget",
+        cwd: project.workspaceRoot,
+        args: ["rev-parse", "--verify", `${workspace.targetRef}^{commit}`],
+      })).stdout.trim();
+      if (!targetResolvedCommit) {
+        return yield* Effect.fail(new Error(`Target '${workspace.targetRef}' has no commit`));
+      }
+
       const existingPath = yield* fileSystem.exists(worktreePath);
       if (existingPath) {
         stage = "reconcile-worktree";
@@ -243,16 +258,20 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           return yield* Effect.fail(new Error("Existing worktree has no branch or HEAD commit"));
         }
         createdPath = worktreePath;
-        resolvedCommit = createdHead;
+        createdFromCommit = createdHead;
       } else {
-        stage = "resolve-target";
-        resolvedCommit = (yield* git.execute({
-          operation: "WorktreeWorkspaceReactor.resolveTarget",
-          cwd: project.workspaceRoot,
-          args: ["rev-parse", "--verify", `${workspace.targetRef}^{commit}`],
-        })).stdout.trim();
-        if (!resolvedCommit) {
-          return yield* Effect.fail(new Error(`Target '${workspace.targetRef}' has no commit`));
+        stage = "resolve-source";
+        if (sourceRef === workspace.targetRef) {
+          createdFromCommit = targetResolvedCommit;
+        } else {
+          createdFromCommit = (yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.resolveSource",
+            cwd: project.workspaceRoot,
+            args: ["rev-parse", "--verify", `${sourceRef}^{commit}`],
+          })).stdout.trim();
+        }
+        if (!createdFromCommit) {
+          return yield* Effect.fail(new Error(`Source '${sourceRef}' has no commit`));
         }
 
         stage = "create-worktree";
@@ -263,7 +282,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           const localBranch = yield* git.execute({
             operation: "WorktreeWorkspaceReactor.resolveLocalBranch",
             cwd: project.workspaceRoot,
-            args: ["show-ref", "--verify", "--quiet", `refs/heads/${workspace.targetRef}`],
+            args: ["show-ref", "--verify", "--quiet", `refs/heads/${sourceRef}`],
             allowNonZeroExit: true,
           });
           localBranchExists = localBranch.code === 0;
@@ -280,8 +299,8 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         }
         const { branch, newBranch } = resolveWorkspaceBranchProvisioning({
           sourceKind: workspace.sourceKind,
-          targetRef: workspace.targetRef,
-          resolvedCommit,
+          sourceRef,
+          sourceCommit: createdFromCommit,
           generatedBranch,
           localBranchExists,
           remotes,
@@ -301,7 +320,13 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         })).stdout.trim();
       }
 
-      if (!createdPath || !createdBranch || !createdHead || !resolvedCommit) {
+      if (
+        !createdPath ||
+        !createdBranch ||
+        !createdHead ||
+        !targetResolvedCommit ||
+        !createdFromCommit
+      ) {
         return yield* Effect.fail(new Error("Worktree provisioning returned incomplete metadata"));
       }
 
@@ -321,8 +346,8 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         path: createdPath,
         branch: createdBranch,
         headRef: createdHead,
-        targetResolvedCommit: resolvedCommit,
-        createdFromCommit: resolvedCommit,
+        targetResolvedCommit,
+        createdFromCommit,
         setupStatus: setupScripts.length > 0 ? "succeeded" : "skipped",
         completedAt: new Date().toISOString(),
       });

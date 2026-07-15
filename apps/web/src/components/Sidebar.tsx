@@ -236,6 +236,7 @@ import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useProjectRunStore, type ProjectRunState } from "../projectRunStore";
+import { useRecentViewsStore } from "../recentViewsStore";
 import {
   selectPrimaryProjectRunCommand,
   upsertProjectRunCommandScripts,
@@ -1391,6 +1392,7 @@ export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
   const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
+  const recordRecentView = useRecentViewsStore((store) => store.recordRecentView);
   const sidebarThreadSummaryByIdRef = useRef(sidebarThreadSummaryById);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerWorkspaceShellSnapshot = useStore(
@@ -3051,7 +3053,7 @@ export default function Sidebar() {
           title: input.title,
           targetRef: input.source.targetRef,
           sourceKind: input.source.kind,
-          sourceRef: input.source.kind === "branch" ? input.source.targetRef : null,
+          sourceRef: input.source.kind === "branch" ? input.source.sourceRef : null,
           modelSelection,
           runtimeMode: "full-access",
           interactionMode: "default",
@@ -4236,11 +4238,19 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
       });
+      recordRecentView({
+        kind: "thread",
+        threadId: ThreadId.makeUnsafe(nextLastThreadRoute.threadId),
+        ...(nextLastThreadRoute.splitViewId
+          ? { splitViewId: nextLastThreadRoute.splitViewId }
+          : {}),
+      });
     },
     [
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
+      recordRecentView,
       threadListExtraPagesByProjectCwd,
     ],
   );

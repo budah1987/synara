@@ -54,7 +54,12 @@ export function resolveDesktopAppDataBase(input?: {
 export function resolveDesktopUserDataPath(input: {
   readonly appDataBase: string;
   readonly isDevelopment: boolean;
+  readonly overridePath?: string | undefined;
 }): string {
+  const overridePath = input.overridePath?.trim();
+  if (overridePath) {
+    return Path.resolve(overridePath);
+  }
   return Path.join(
     input.appDataBase,
     input.isDevelopment ? DEV_USER_DATA_DIR_NAME : PROD_USER_DATA_DIR_NAME,

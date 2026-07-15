@@ -38,7 +38,7 @@ import { Spinner } from "./ui/spinner";
 
 export type WorkspaceCreateSource =
   | { kind: "new-branch"; targetRef: string }
-  | { kind: "branch"; targetRef: string }
+  | { kind: "branch"; sourceRef: string; targetRef: string }
   | { kind: "pull-request"; reference: string };
 
 interface WorktreeWorkspaceCreateDialogProps {
@@ -177,6 +177,7 @@ export function WorktreeWorkspaceCreateDialog({
   const [title, setTitle] = useState("New workspace");
   const [sourceKind, setSourceKind] = useState<WorkspaceCreateSource["kind"]>("new-branch");
   const [targetRef, setTargetRef] = useState(defaultTargetRef ?? "HEAD");
+  const [repositoryTargetRef, setRepositoryTargetRef] = useState(defaultTargetRef ?? "HEAD");
   const [branchQuery, setBranchQuery] = useState("");
   const [pullRequestQuery, setPullRequestQuery] = useState("");
   const [pullRequestFilter, setPullRequestFilter] = useState<GitPullRequestListFilter>("all");
@@ -195,6 +196,7 @@ export function WorktreeWorkspaceCreateDialog({
     setTitle("New workspace");
     setSourceKind("new-branch");
     setTargetRef(defaultTargetRef ?? "HEAD");
+    setRepositoryTargetRef(defaultTargetRef ?? "HEAD");
     setBranchQuery("");
     setPullRequestQuery("");
     setPullRequestFilter("all");
@@ -221,6 +223,7 @@ export function WorktreeWorkspaceCreateDialog({
           result.branches.find((branch) => !branch.isRemote && branch.isDefault)?.name ??
           result.branches.find((branch) => !branch.isRemote && branch.current)?.name;
         setTargetRef(defaultTargetRef ?? preferred ?? "HEAD");
+        setRepositoryTargetRef(defaultTargetRef ?? preferred ?? "HEAD");
       })
       .catch((cause) => {
         if (cancelled) return;
@@ -315,7 +318,13 @@ export function WorktreeWorkspaceCreateDialog({
       const source: WorkspaceCreateSource =
         sourceKind === "pull-request"
           ? { kind: sourceKind, reference: pullRequestReference.trim() }
-          : { kind: sourceKind, targetRef: targetRef.trim() };
+          : sourceKind === "branch"
+            ? {
+                kind: sourceKind,
+                sourceRef: targetRef.trim(),
+                targetRef: repositoryTargetRef.trim(),
+              }
+            : { kind: sourceKind, targetRef: targetRef.trim() };
       await onCreate({ title: title.trim(), source });
       onOpenChange(false);
     } catch (cause) {
@@ -583,8 +592,8 @@ export function WorktreeWorkspaceCreateDialog({
 
           {sourceKind === "branch" ? (
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Synara checks out this branch in the new workspace. Branches already used by another
-              worktree stay unavailable to prevent Git conflicts.
+              Synara checks out this branch and targets {repositoryTargetRef}. Branches already used
+              by another worktree stay unavailable to prevent Git conflicts.
             </p>
           ) : null}
           {error ? (
