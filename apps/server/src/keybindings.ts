@@ -122,10 +122,23 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+7", command: "thread.jump.7", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+8", command: "thread.jump.8", when: "!terminalFocus && !terminalWorkspaceOpen" },
   { key: "mod+9", command: "thread.jump.9", when: "!terminalFocus && !terminalWorkspaceOpen" },
-  { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
-  { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
-  { key: "mod+alt+arrowdown", command: "workspace.visible.next", when: "!terminalFocus" },
-  { key: "mod+alt+arrowup", command: "workspace.visible.previous", when: "!terminalFocus" },
+  { key: "mod+shift+1", command: "chat.jump.1", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+2", command: "chat.jump.2", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+3", command: "chat.jump.3", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+4", command: "chat.jump.4", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+5", command: "chat.jump.5", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+6", command: "chat.jump.6", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+7", command: "chat.jump.7", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+8", command: "chat.jump.8", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+shift+9", command: "chat.jump.9", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  { key: "mod+]", command: "chat.visible.next", when: "!terminalFocus && !terminalWorkspaceOpen" },
+  {
+    key: "mod+[",
+    command: "chat.visible.previous",
+    when: "!terminalFocus && !terminalWorkspaceOpen",
+  },
+  { key: "mod+arrowdown", command: "workspace.visible.next", when: "!terminalFocus" },
+  { key: "mod+arrowup", command: "workspace.visible.previous", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
 ];
 
@@ -598,6 +611,39 @@ const CREATION_COMMANDS_WITH_TERMINAL_ESCAPE = new Set<KeybindingRule["command"]
   "chat.newCursor",
   "chat.split",
 ]);
+const OUTDATED_NAVIGATION_DEFAULT_MIGRATIONS: ReadonlyArray<{
+  readonly from: KeybindingRule;
+  readonly to: KeybindingRule;
+}> = [
+  {
+    from: { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
+    to: {
+      key: "mod+]",
+      command: "chat.visible.next",
+      when: "!terminalFocus && !terminalWorkspaceOpen",
+    },
+  },
+  {
+    from: { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
+    to: {
+      key: "mod+[",
+      command: "chat.visible.previous",
+      when: "!terminalFocus && !terminalWorkspaceOpen",
+    },
+  },
+  {
+    from: { key: "mod+alt+arrowdown", command: "workspace.visible.next", when: "!terminalFocus" },
+    to: { key: "mod+arrowdown", command: "workspace.visible.next", when: "!terminalFocus" },
+  },
+  {
+    from: {
+      key: "mod+alt+arrowup",
+      command: "workspace.visible.previous",
+      when: "!terminalFocus",
+    },
+    to: { key: "mod+arrowup", command: "workspace.visible.previous", when: "!terminalFocus" },
+  },
+];
 
 function readKeybindingEntryCommand(entry: unknown): string | null {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
@@ -686,6 +732,32 @@ function relaxCreationCommandTerminalGuards(rules: readonly KeybindingRule[]): {
     migratedCount += 1;
     return { ...rule, when: RELAXED_CREATION_TERMINAL_GUARD };
   });
+  return { rules: next, migratedCount };
+}
+
+// Existing installs persist the shipped defaults, so changing DEFAULT_KEYBINDINGS alone
+// would leave the previous navigation chords active forever. Move only exact old defaults;
+// custom bindings keep their keys, and a custom rule already occupying the new chord wins.
+function migrateOutdatedNavigationDefaultKeybindingRules(rules: readonly KeybindingRule[]): {
+  readonly rules: KeybindingRule[];
+  readonly migratedCount: number;
+} {
+  const next = [...rules];
+  let migratedCount = 0;
+
+  for (const migration of OUTDATED_NAVIGATION_DEFAULT_MIGRATIONS) {
+    const outdatedIndex = next.findIndex((rule) => isSameKeybindingRule(rule, migration.from));
+    if (outdatedIndex === -1) continue;
+
+    const newShortcutOccupied = next.some(
+      (rule, index) => index !== outdatedIndex && hasSameShortcutContext(rule, migration.to),
+    );
+    if (newShortcutOccupied) continue;
+
+    next[outdatedIndex] = migration.to;
+    migratedCount += 1;
+  }
+
   return { rules: next, migratedCount };
 }
 
@@ -937,9 +1009,11 @@ const makeKeybindings = Effect.gen(function* () {
 
     const relaxed = relaxCreationCommandTerminalGuards(keybindings);
     migratedDefaultRuleCount += relaxed.migratedCount;
+    const navigationMigrated = migrateOutdatedNavigationDefaultKeybindingRules(relaxed.rules);
+    migratedDefaultRuleCount += navigationMigrated.migratedCount;
 
     return {
-      keybindings: relaxed.rules,
+      keybindings: navigationMigrated.rules,
       issues,
       migratedLegacyCommandCount,
       migratedDefaultRuleCount,

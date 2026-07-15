@@ -155,20 +155,26 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedThreadJump.command, "thread.jump.3");
 
+    const parsedChatJump = yield* decode(KeybindingRule, {
+      key: "mod+shift+3",
+      command: "chat.jump.3",
+    });
+    assert.strictEqual(parsedChatJump.command, "chat.jump.3");
+
     const parsedVisibleNext = yield* decode(KeybindingRule, {
-      key: "mod+shift+]",
+      key: "mod+]",
       command: "chat.visible.next",
     });
     assert.strictEqual(parsedVisibleNext.command, "chat.visible.next");
 
     const parsedVisiblePrevious = yield* decode(KeybindingRule, {
-      key: "mod+shift+[",
+      key: "mod+[",
       command: "chat.visible.previous",
     });
     assert.strictEqual(parsedVisiblePrevious.command, "chat.visible.previous");
 
     const parsedWorkspaceNext = yield* decode(KeybindingRule, {
-      key: "mod+alt+arrowdown",
+      key: "mod+arrowdown",
       command: "workspace.visible.next",
     });
     assert.strictEqual(parsedWorkspaceNext.command, "workspace.visible.next");

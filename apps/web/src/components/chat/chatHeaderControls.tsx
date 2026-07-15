@@ -213,6 +213,10 @@ export interface SurfaceTabChipProps {
   onContextMenu?: MouseEventHandler<HTMLDivElement> | undefined;
 }
 
+export function shouldCloseSurfaceTabFromAuxClick(button: number, closable: boolean): boolean {
+  return closable && button === 1;
+}
+
 export const SurfaceTabChip = forwardRef<HTMLDivElement, SurfaceTabChipProps>(
   function SurfaceTabChip(
     {
@@ -244,6 +248,12 @@ export const SurfaceTabChip = forwardRef<HTMLDivElement, SurfaceTabChipProps>(
           className,
         )}
         onContextMenu={onContextMenu}
+        onAuxClick={(event) => {
+          if (!shouldCloseSurfaceTabFromAuxClick(event.button, Boolean(onClose))) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onClose?.();
+        }}
       >
         {onClose && closePlacement === "leading-swap" ? (
           <button

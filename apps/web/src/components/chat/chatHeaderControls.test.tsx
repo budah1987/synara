@@ -6,9 +6,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SurfaceTabChip } from "./chatHeaderControls";
+import { shouldCloseSurfaceTabFromAuxClick, SurfaceTabChip } from "./chatHeaderControls";
 
 describe("SurfaceTabChip", () => {
+  it("only treats a middle click on a closable tab as a close gesture", () => {
+    expect(shouldCloseSurfaceTabFromAuxClick(1, true)).toBe(true);
+    expect(shouldCloseSurfaceTabFromAuxClick(0, true)).toBe(false);
+    expect(shouldCloseSurfaceTabFromAuxClick(2, true)).toBe(false);
+    expect(shouldCloseSurfaceTabFromAuxClick(1, false)).toBe(false);
+  });
+
   it("keeps the identity glyph separate from a trailing close control", () => {
     const markup = renderToStaticMarkup(
       <SurfaceTabChip

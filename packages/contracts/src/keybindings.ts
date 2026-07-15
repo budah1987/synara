@@ -52,6 +52,15 @@ const STATIC_KEYBINDING_COMMANDS = [
   "thread.jump.7",
   "thread.jump.8",
   "thread.jump.9",
+  "chat.jump.1",
+  "chat.jump.2",
+  "chat.jump.3",
+  "chat.jump.4",
+  "chat.jump.5",
+  "chat.jump.6",
+  "chat.jump.7",
+  "chat.jump.8",
+  "chat.jump.9",
   "chat.visible.next",
   "chat.visible.previous",
   "workspace.visible.next",
@@ -72,6 +81,19 @@ export const THREAD_JUMP_KEYBINDING_COMMANDS = [
   "thread.jump.9",
 ] as const;
 export type ThreadJumpKeybindingCommand = (typeof THREAD_JUMP_KEYBINDING_COMMANDS)[number];
+
+export const CHAT_TAB_JUMP_KEYBINDING_COMMANDS = [
+  "chat.jump.1",
+  "chat.jump.2",
+  "chat.jump.3",
+  "chat.jump.4",
+  "chat.jump.5",
+  "chat.jump.6",
+  "chat.jump.7",
+  "chat.jump.8",
+  "chat.jump.9",
+] as const;
+export type ChatTabJumpKeybindingCommand = (typeof CHAT_TAB_JUMP_KEYBINDING_COMMANDS)[number];
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
   Schema.Literal("script."),

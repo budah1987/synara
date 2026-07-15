@@ -31,6 +31,7 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  CheckCircle2Icon,
   ChevronDownIcon,
   HandoffIcon,
   HistoryIcon,
@@ -62,7 +63,11 @@ import { useSidebar } from "../ui/sidebar";
 import { useAppSettings } from "../../appSettings";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
-import { sortThreadsForSidebar } from "../Sidebar.logic";
+import {
+  resolveThreadStatusPill,
+  sortThreadsForSidebar,
+  type ThreadStatusPill,
+} from "../Sidebar.logic";
 import {
   storeEditorRailActiveChat,
   readEditorRailChatTabs,
@@ -76,6 +81,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { readNativeApi } from "../../nativeApi";
+import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import {
   Combobox,
   ComboboxEmpty,
@@ -180,6 +186,16 @@ const EDITOR_CHAT_HISTORY_LIMIT = 30;
 
 type EditorRailChatTab = EditorRailChatTabSnapshot;
 
+function ConversationTabStatus({ status }: { status: ThreadStatusPill }) {
+  if (status.label === "Completed") {
+    return <CheckCircle2Icon aria-hidden="true" className={cn("size-3", status.colorClass)} />;
+  }
+  if (status.pulse) {
+    return <ThreadRunningSpinner className={cn("size-2.5", status.colorClass)} />;
+  }
+  return <span aria-hidden="true" className={cn("size-1.5 rounded-full", status.dotClass)} />;
+}
+
 export function resolveVisibleConversationTabs(input: {
   workspaceScoped: boolean;
   availableTabs: ReadonlyArray<EditorRailChatTab>;
@@ -236,6 +252,23 @@ function EditorChatHistoryMenu(props: {
   const { settings } = useAppSettings();
   const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const displayThreads = useStore(selectDisplayThreads);
+  const conversationStatusByThreadId = useMemo(
+    () =>
+      new Map(
+        displayThreads.map(
+          (thread) =>
+            [
+              thread.id,
+              resolveThreadStatusPill({
+                thread,
+                hasPendingApprovals: thread.hasPendingApprovals,
+                hasPendingUserInput: thread.hasPendingUserInput,
+              }),
+            ] as const,
+        ),
+      ),
+    [displayThreads],
+  );
   const historyThreads = useMemo(
     () =>
       sortThreadsForSidebar(
@@ -612,6 +645,7 @@ function EditorRailTabs(props: {
             >
               {chatTabs.map((thread) => {
                 const active = props.activeSurface === "chat" && thread.id === props.activeThreadId;
+                const threadStatus = conversationStatusByThreadId.get(thread.id) ?? null;
                 return (
                   <SurfaceTabChip
                     key={thread.id}
@@ -626,6 +660,17 @@ function EditorRailTabs(props: {
                         tone="header"
                         className="size-3 shrink-0"
                       />
+                    }
+                    trailing={
+                      threadStatus ? (
+                        <span
+                          aria-label={threadStatus.label}
+                          title={threadStatus.label}
+                          className="flex size-3 shrink-0 items-center justify-center"
+                        >
+                          <ConversationTabStatus status={threadStatus} />
+                        </span>
+                      ) : null
                     }
                     closeLabel={`Close ${thread.title}`}
                     closePlacement="trailing"

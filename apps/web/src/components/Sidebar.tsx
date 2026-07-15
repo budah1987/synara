@@ -117,6 +117,7 @@ import { deleteProjectFromClient } from "../lib/projectDelete";
 import { persistAppStateNow, useStore } from "../store";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
+  chatTabJumpIndexFromCommand,
   resolveShortcutCommand,
   shortcutLabelForCommand,
   splitShortcutLabel,
@@ -332,6 +333,7 @@ import {
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
+  resolveProjectStatusIndicator,
   resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   type SettingsBackTarget,
@@ -598,7 +600,7 @@ function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
     );
   }
   if (status.pulse) {
-    return <ThreadRunningSpinner />;
+    return <ThreadRunningSpinner className={status.colorClass} />;
   }
   return (
     <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
@@ -5213,19 +5215,83 @@ export default function Sidebar() {
       null,
     [activeSidebarThreadId, sidebarDisplayThreads],
   );
+  const workspaceThreadsByWorkspaceId = useMemo(() => {
+    const threadsByWorkspaceId = new Map<WorktreeWorkspaceId, SidebarThreadSummary[]>();
+    for (const thread of sidebarDisplayThreads) {
+      if (!thread.workspaceId) continue;
+      const workspaceThreads = threadsByWorkspaceId.get(thread.workspaceId) ?? [];
+      workspaceThreads.push(thread);
+      threadsByWorkspaceId.set(thread.workspaceId, workspaceThreads);
+    }
+    for (const [workspaceId, workspaceThreads] of threadsByWorkspaceId) {
+      threadsByWorkspaceId.set(
+        workspaceId,
+        sortThreadsForSidebar(workspaceThreads, appSettings.sidebarThreadSortOrder),
+      );
+    }
+    return threadsByWorkspaceId;
+  }, [appSettings.sidebarThreadSortOrder, sidebarDisplayThreads]);
+  const resolveWorkspaceShortcutThreadId = useCallback(
+    (workspaceId: WorktreeWorkspaceId): ThreadId | null => {
+      const workspaceThreads = workspaceThreadsByWorkspaceId.get(workspaceId) ?? [];
+      const rememberedThreadId = readEditorRailActiveChat(`workspace:${workspaceId}`);
+      return (
+        workspaceThreads.find((thread) => thread.id === rememberedThreadId)?.id ??
+        workspaceThreads[0]?.id ??
+        null
+      );
+    },
+    [workspaceThreadsByWorkspaceId],
+  );
   const workspaceConversationThreadIds = useMemo(
     () =>
       activeWorkspaceId
-        ? sortThreadsForSidebar(
-            sidebarDisplayThreads.filter((thread) => thread.workspaceId === activeWorkspaceId),
-            appSettings.sidebarThreadSortOrder,
-          ).map((thread) => thread.id)
+        ? (workspaceThreadsByWorkspaceId.get(activeWorkspaceId) ?? []).map((thread) => thread.id)
         : [],
-    [activeWorkspaceId, appSettings.sidebarThreadSortOrder, sidebarDisplayThreads],
+    [activeWorkspaceId, workspaceThreadsByWorkspaceId],
   );
-  const shortcutConversationThreadIds =
+  const conversationTabThreadIds =
     activeWorkspaceId && workspaceConversationThreadIds.length > 0
       ? workspaceConversationThreadIds
+      : visibleSidebarThreadIds;
+  const activeWorkspaceProjectId = activeWorkspaceId
+    ? (worktreeWorkspaces.find((workspace) => workspace.id === activeWorkspaceId)?.projectId ??
+      null)
+    : null;
+  const workspaceNavigationIdsForActiveProject = activeWorkspaceProjectId
+    ? workspaceNavigationIds.filter(
+        (workspaceId) =>
+          worktreeWorkspaces.find((workspace) => workspace.id === workspaceId)?.projectId ===
+          activeWorkspaceProjectId,
+      )
+    : workspaceNavigationIds;
+  const visibleWorkspaceShortcutTargets = useMemo(
+    () =>
+      standardProjects
+        .filter((project) => project.expanded)
+        .flatMap((project) =>
+          worktreeWorkspaces
+            .filter(
+              (workspace) =>
+                workspace.projectId === project.id &&
+                workspace.deletedAt === null &&
+                workspaceThreadsByWorkspaceId.has(workspace.id),
+            )
+            .flatMap((workspace) => {
+              const threadId = resolveWorkspaceShortcutThreadId(workspace.id);
+              return threadId ? [{ workspaceId: workspace.id, threadId }] : [];
+            }),
+        ),
+    [
+      resolveWorkspaceShortcutThreadId,
+      standardProjects,
+      workspaceThreadsByWorkspaceId,
+      worktreeWorkspaces,
+    ],
+  );
+  const sidebarJumpTargetThreadIds =
+    workspaceProtocolVersion === 2
+      ? visibleWorkspaceShortcutTargets.map((target) => target.threadId)
       : visibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
     () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
@@ -5334,7 +5400,7 @@ export default function Sidebar() {
   const threadJumpCommandByThreadId = useMemo(() => {
     const mapping = new Map<ThreadId, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
     for (const [visibleThreadIndex, threadId] of getThreadJumpTargetIds(
-      shortcutConversationThreadIds,
+      sidebarJumpTargetThreadIds,
     ).entries()) {
       const jumpCommand = threadJumpCommandForIndex(visibleThreadIndex);
       if (!jumpCommand) {
@@ -5344,11 +5410,21 @@ export default function Sidebar() {
     }
 
     return mapping;
-  }, [shortcutConversationThreadIds]);
+  }, [sidebarJumpTargetThreadIds]);
   const threadJumpThreadIds = useMemo(
     () => [...threadJumpCommandByThreadId.keys()],
     [threadJumpCommandByThreadId],
   );
+  const workspaceShortcutThreadIdById = useMemo(() => {
+    const numberedThreadIds = new Set(threadJumpThreadIds);
+    const mapping = new Map<WorktreeWorkspaceId, ThreadId>();
+    for (const target of visibleWorkspaceShortcutTargets) {
+      if (numberedThreadIds.has(target.threadId)) {
+        mapping.set(target.workspaceId, target.threadId);
+      }
+    }
+    return mapping;
+  }, [threadJumpThreadIds, visibleWorkspaceShortcutTargets]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
       terminalFocus: isTerminalFocused(),
@@ -6325,16 +6401,25 @@ export default function Sidebar() {
                         workspace.projectId === project.id && workspace.deletedAt === null,
                     )
                     .map((workspace) => {
-                      const workspaceThreads = sortThreadsForSidebar(
-                        sidebarDisplayThreads.filter(
-                          (thread) => thread.workspaceId === workspace.id,
-                        ),
-                        appSettings.sidebarThreadSortOrder,
-                      );
+                      const workspaceThreads =
+                        workspaceThreadsByWorkspaceId.get(workspace.id) ?? [];
                       const firstThread = workspaceThreads[0];
                       const isActiveWorkspace = workspaceThreads.some(
                         (thread) => thread.id === visualActiveSidebarThreadId,
                       );
+                      const workspaceStatus = resolveProjectStatusIndicator(
+                        workspaceThreads.map(resolveThreadStatusForSidebar),
+                      );
+                      const workspaceShortcutThreadId = workspaceShortcutThreadIdById.get(
+                        workspace.id,
+                      );
+                      const workspaceJumpLabel = workspaceShortcutThreadId
+                        ? (visibleThreadJumpLabelByThreadId.get(workspaceShortcutThreadId) ?? null)
+                        : null;
+                      const workspaceJumpLabelParts = workspaceShortcutThreadId
+                        ? (visibleThreadJumpLabelPartsByThreadId.get(workspaceShortcutThreadId) ??
+                          EMPTY_SHORTCUT_PARTS)
+                        : EMPTY_SHORTCUT_PARTS;
                       const branchUrl = buildGitHubBranchUrl(
                         githubRepositoryUrlByProjectId.get(workspace.projectId),
                         workspace.branch,
@@ -6377,7 +6462,15 @@ export default function Sidebar() {
                                     <span className="min-w-0 flex-1 truncate font-normal text-foreground/90">
                                       {workspace.title}
                                     </span>
-                                    {workspace.state !== "ready" ? (
+                                    {workspaceJumpLabel ? (
+                                      <KbdGroup
+                                        className={sidebarHoverRevealHideClassName("workspace-row")}
+                                      >
+                                        {workspaceJumpLabelParts.map((part) => (
+                                          <Kbd key={part}>{part}</Kbd>
+                                        ))}
+                                      </KbdGroup>
+                                    ) : workspace.state !== "ready" ? (
                                       <span
                                         className={cn(
                                           "size-1.5 shrink-0 rounded-full",
@@ -6387,6 +6480,17 @@ export default function Sidebar() {
                                         )}
                                         aria-label={`Workspace ${workspace.state}`}
                                       />
+                                    ) : workspaceStatus ? (
+                                      <span
+                                        aria-label={`Workspace status: ${workspaceStatus.label}`}
+                                        title={workspaceStatus.label}
+                                        className={cn(
+                                          "flex size-4 shrink-0 items-center justify-center",
+                                          sidebarHoverRevealHideClassName("workspace-row"),
+                                        )}
+                                      >
+                                        <SidebarStatusTrailingGlyph status={workspaceStatus} />
+                                      </span>
                                     ) : null}
                                   </button>
                                 }
@@ -6647,26 +6751,28 @@ export default function Sidebar() {
         }
         return;
       }
+      const chatTabJumpIndex = chatTabJumpIndexFromCommand(command ?? "");
+      if (chatTabJumpIndex !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        const targetThreadId = getThreadJumpTargetIds(conversationTabThreadIds)[chatTabJumpIndex];
+        if (targetThreadId) {
+          activateThreadFromSidebarIntent(targetThreadId);
+        }
+        return;
+      }
       if (command === "workspace.visible.next" || command === "workspace.visible.previous") {
         event.preventDefault();
         event.stopPropagation();
         const nextWorkspaceId = getNextVisibleWorkspaceId({
-          visibleWorkspaceIds: workspaceNavigationIds,
+          visibleWorkspaceIds: workspaceNavigationIdsForActiveProject,
           activeWorkspaceId,
           direction: command === "workspace.visible.previous" ? "backward" : "forward",
         });
         if (!nextWorkspaceId || nextWorkspaceId === activeWorkspaceId) return;
 
-        const workspaceThreads = sortThreadsForSidebar(
-          sidebarDisplayThreads.filter((thread) => thread.workspaceId === nextWorkspaceId),
-          appSettings.sidebarThreadSortOrder,
-        );
-        const rememberedThreadId = readEditorRailActiveChat(`workspace:${nextWorkspaceId}`);
-        const targetThread =
-          workspaceThreads.find((thread) => thread.id === rememberedThreadId) ??
-          workspaceThreads[0] ??
-          null;
-        if (targetThread) activateThreadFromSidebarIntent(targetThread.id);
+        const targetThreadId = resolveWorkspaceShortcutThreadId(nextWorkspaceId);
+        if (targetThreadId) activateThreadFromSidebarIntent(targetThreadId);
         return;
       }
       if (command !== "chat.visible.next" && command !== "chat.visible.previous") {
@@ -6676,7 +6782,7 @@ export default function Sidebar() {
       event.preventDefault();
       event.stopPropagation();
       const nextThreadId = getNextVisibleSidebarThreadId({
-        visibleThreadIds: shortcutConversationThreadIds,
+        visibleThreadIds: conversationTabThreadIds,
         activeThreadId: activeSidebarThreadId ?? undefined,
         direction: command === "chat.visible.previous" ? "backward" : "forward",
       });
@@ -6724,17 +6830,16 @@ export default function Sidebar() {
     activateThreadFromSidebarIntent,
     activeSidebarThreadId,
     activeWorkspaceId,
-    appSettings.sidebarThreadSortOrder,
     keybindings,
     getCurrentSidebarShortcutContext,
     homeDir,
     navigate,
+    resolveWorkspaceShortcutThreadId,
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
-    shortcutConversationThreadIds,
-    sidebarDisplayThreads,
-    workspaceNavigationIds,
+    conversationTabThreadIds,
+    workspaceNavigationIdsForActiveProject,
   ]);
 
   useEffect(() => {

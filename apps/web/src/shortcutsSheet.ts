@@ -155,22 +155,24 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "chat.visible.previous",
     label: "Previous conversation",
-    description: "Cycle to the previous conversation in the active workspace.",
+    description: "Cycle to the previous conversation tab in the active worktree.",
   },
   {
     command: "chat.visible.next",
     label: "Next conversation",
-    description: "Cycle to the next conversation in the active workspace.",
+    description: "Cycle to the next conversation tab in the active worktree.",
   },
   {
     command: "workspace.visible.previous",
-    label: "Previous workspace",
-    description: "Move to the previous worktree and restore its last active conversation.",
+    label: "Previous worktree",
+    description:
+      "Move to the previous worktree in the active project and restore its last conversation.",
   },
   {
     command: "workspace.visible.next",
-    label: "Next workspace",
-    description: "Move to the next worktree and restore its last active conversation.",
+    label: "Next worktree",
+    description:
+      "Move to the next worktree in the active project and restore its last conversation.",
   },
   {
     command: "editor.openFavorite",
@@ -183,8 +185,17 @@ const THREAD_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
   { length: 9 },
   (_, index) => ({
     command: `thread.jump.${index + 1}` as KeybindingCommand,
-    label: `Jump to visible thread ${index + 1}`,
-    description: "Focus a visible thread directly from the sidebar number row.",
+    label: `Jump to sidebar item ${index + 1}`,
+    description: "Focus a visible worktree or thread directly from the sidebar.",
+  }),
+);
+
+const CHAT_TAB_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
+  { length: 9 },
+  (_, index) => ({
+    command: `chat.jump.${index + 1}` as KeybindingCommand,
+    label: `Jump to conversation tab ${index + 1}`,
+    description: "Focus a visible conversation tab in the active worktree.",
   }),
 );
 
@@ -297,13 +308,20 @@ export function buildShortcutSheetSections(
         options.context,
       );
 
+  const currentConversationTabEntries = definitionsToEntries(
+    CHAT_TAB_JUMP_DEFINITIONS,
+    options.keybindings,
+    options.platform,
+    options.context,
+  );
+
   sections.push({
     id: "available-now",
     title: "Available now",
     description: options.context.terminalWorkspaceOpen
       ? "These reflect the active workspace-terminal context."
       : "These reflect the current chat and sidebar context.",
-    entries: [...currentEntries, ...currentNavigationEntries],
+    entries: [...currentEntries, ...currentNavigationEntries, ...currentConversationTabEntries],
   });
 
   const alternateContext: ShortcutSheetContext = options.context.terminalWorkspaceOpen

@@ -1,4 +1,6 @@
 import {
+  CHAT_TAB_JUMP_KEYBINDING_COMMANDS,
+  type ChatTabJumpKeybindingCommand,
   type KeybindingCommand,
   type ResolvedKeybindingRule,
   type KeybindingShortcut,
@@ -145,12 +147,12 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   },
   {
     command: "workspace.visible.next",
-    shortcut: commandShortcut("arrowdown", { altKey: true }),
+    shortcut: commandShortcut("arrowdown"),
     whenAst: whenNotTerminalFocus,
   },
   {
     command: "workspace.visible.previous",
-    shortcut: commandShortcut("arrowup", { altKey: true }),
+    shortcut: commandShortcut("arrowup"),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -227,6 +229,21 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "thread.jump.9",
     shortcut: commandShortcut("9"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  ...CHAT_TAB_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
+    command,
+    shortcut: commandShortcut(String(index + 1), { shiftKey: true }),
+    whenAst: whenThreadJumpAvailable,
+  })),
+  {
+    command: "chat.visible.next",
+    shortcut: commandShortcut("]"),
+    whenAst: whenThreadJumpAvailable,
+  },
+  {
+    command: "chat.visible.previous",
+    shortcut: commandShortcut("["),
     whenAst: whenThreadJumpAvailable,
   },
   {
@@ -575,6 +592,15 @@ export function threadJumpCommandForIndex(index: number): ThreadJumpKeybindingCo
 
 export function threadJumpIndexFromCommand(command: string): number | null {
   const index = THREAD_JUMP_KEYBINDING_COMMANDS.indexOf(command as ThreadJumpKeybindingCommand);
+  return index === -1 ? null : index;
+}
+
+export function chatTabJumpCommandForIndex(index: number): ChatTabJumpKeybindingCommand | null {
+  return CHAT_TAB_JUMP_KEYBINDING_COMMANDS[index] ?? null;
+}
+
+export function chatTabJumpIndexFromCommand(command: string): number | null {
+  const index = CHAT_TAB_JUMP_KEYBINDING_COMMANDS.indexOf(command as ChatTabJumpKeybindingCommand);
   return index === -1 ? null : index;
 }
 
