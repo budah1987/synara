@@ -1148,6 +1148,22 @@ export function getNextVisibleSidebarThreadId(input: {
   return visibleThreadIds[nextIndex] ?? null;
 }
 
+export function resolveConversationTabThreadIds(input: {
+  workspaceScoped: boolean;
+  workspaceThreadIds: readonly Thread["id"][];
+  editorScoped: boolean;
+  editorTabThreadIds: readonly Thread["id"][];
+  visibleSidebarThreadIds: readonly Thread["id"][];
+}): Thread["id"][] {
+  if (input.workspaceScoped && input.workspaceThreadIds.length > 0) {
+    return [...input.workspaceThreadIds];
+  }
+  if (input.editorScoped && input.editorTabThreadIds.length > 0) {
+    return [...input.editorTabThreadIds];
+  }
+  return [...input.visibleSidebarThreadIds];
+}
+
 export function getThreadJumpTargetIds(orderedThreadIds: readonly Thread["id"][]): Thread["id"][] {
   if (orderedThreadIds.length <= THREAD_JUMP_COMMANDS.length) {
     return [...orderedThreadIds];

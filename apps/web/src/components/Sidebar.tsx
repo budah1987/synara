@@ -102,7 +102,7 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
-import { readEditorRailActiveChat } from "../editorViewState";
+import { readEditorRailActiveChat, readEditorRailChatTabs } from "../editorViewState";
 import { openInPreferredEditor } from "../editorPreferences";
 import {
   buildFixFindingsPrompt,
@@ -349,6 +349,7 @@ import {
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
   resolveProjectStatusIndicator,
+  resolveConversationTabThreadIds,
   resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   type SettingsBackTarget,
@@ -5596,12 +5597,13 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
-  const activeWorkspaceId = useMemo(() => {
-    const workspaceId = sidebarDisplayThreads.find(
-      (thread) => thread.id === activeSidebarThreadId,
-    )?.workspaceId;
-    return workspaceId ? WorktreeWorkspaceId.makeUnsafe(workspaceId) : null;
-  }, [activeSidebarThreadId, sidebarDisplayThreads]);
+  const activeSidebarThread = useMemo(
+    () => sidebarDisplayThreads.find((thread) => thread.id === activeSidebarThreadId) ?? null,
+    [activeSidebarThreadId, sidebarDisplayThreads],
+  );
+  const activeWorkspaceId = activeSidebarThread?.workspaceId
+    ? WorktreeWorkspaceId.makeUnsafe(activeSidebarThread.workspaceId)
+    : null;
   const workspaceThreadsByWorkspaceId = useMemo(() => {
     const threadsByWorkspaceId = new Map<WorktreeWorkspaceId, SidebarThreadSummary[]>();
     for (const thread of sidebarDisplayThreads) {
@@ -5638,10 +5640,24 @@ export default function Sidebar() {
         : [],
     [activeWorkspaceId, workspaceThreadsByWorkspaceId],
   );
-  const conversationTabThreadIds =
-    activeWorkspaceId && workspaceConversationThreadIds.length > 0
-      ? workspaceConversationThreadIds
-      : visibleSidebarThreadIds;
+  const editorTabThreadIds = useMemo(() => {
+    if (settingsSectionSearch.view !== "editor" || !activeSidebarThread) {
+      return [];
+    }
+    const storedThreadIds = readEditorRailChatTabs(`project:${activeSidebarThread.projectId}`).map(
+      (tab) => tab.id,
+    );
+    return storedThreadIds.includes(activeSidebarThread.id)
+      ? storedThreadIds
+      : [...storedThreadIds, activeSidebarThread.id];
+  }, [activeSidebarThread, settingsSectionSearch.view]);
+  const conversationTabThreadIds = resolveConversationTabThreadIds({
+    workspaceScoped: activeWorkspaceId !== null,
+    workspaceThreadIds: workspaceConversationThreadIds,
+    editorScoped: settingsSectionSearch.view === "editor",
+    editorTabThreadIds,
+    visibleSidebarThreadIds,
+  });
   const activeWorkspaceProjectId = activeWorkspaceId
     ? (worktreeWorkspaces.find((workspace) => workspace.id === activeWorkspaceId)?.projectId ??
       null)

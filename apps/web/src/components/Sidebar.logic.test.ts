@@ -41,6 +41,7 @@ import {
   resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
+  resolveConversationTabThreadIds,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -1397,6 +1398,58 @@ describe("getNextVisibleSidebarThreadId", () => {
         direction: "backward",
       }),
     ).toBe(ThreadId.makeUnsafe("thread-3"));
+  });
+});
+
+describe("resolveConversationTabThreadIds", () => {
+  const sidebarThreadIds = [
+    ThreadId.makeUnsafe("thread-newest"),
+    ThreadId.makeUnsafe("thread-middle"),
+    ThreadId.makeUnsafe("thread-oldest"),
+  ];
+  const editorTabThreadIds = sidebarThreadIds.toReversed();
+
+  it("preserves editor tab order instead of cycling in reversed sidebar order", () => {
+    const resolvedThreadIds = resolveConversationTabThreadIds({
+      workspaceScoped: false,
+      workspaceThreadIds: [],
+      editorScoped: true,
+      editorTabThreadIds,
+      visibleSidebarThreadIds: sidebarThreadIds,
+    });
+
+    expect(resolvedThreadIds).toEqual(editorTabThreadIds);
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds: resolvedThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-middle"),
+        direction: "backward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-oldest"));
+    expect(
+      getNextVisibleSidebarThreadId({
+        visibleThreadIds: resolvedThreadIds,
+        activeThreadId: ThreadId.makeUnsafe("thread-middle"),
+        direction: "forward",
+      }),
+    ).toBe(ThreadId.makeUnsafe("thread-newest"));
+  });
+
+  it("uses workspace tab order before editor or sidebar order", () => {
+    const workspaceThreadIds = [
+      ThreadId.makeUnsafe("workspace-left"),
+      ThreadId.makeUnsafe("workspace-right"),
+    ];
+
+    expect(
+      resolveConversationTabThreadIds({
+        workspaceScoped: true,
+        workspaceThreadIds,
+        editorScoped: true,
+        editorTabThreadIds,
+        visibleSidebarThreadIds: sidebarThreadIds,
+      }),
+    ).toEqual(workspaceThreadIds);
   });
 });
 
