@@ -95,6 +95,7 @@ import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
+import { findWorkspaceForPullRequest } from "@synara/shared/pullRequest";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -157,6 +158,7 @@ import {
   sidebarLocalServersQueryOptions,
 } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import { resolvePullRequestAssociation } from "../lib/gitPullRequestAssociation";
 import {
   archiveThreadFromClient,
   isThreadAlreadyUnarchivedError,
@@ -3082,10 +3084,12 @@ export default function Sidebar() {
         if (!prepared.worktreePath) {
           throw new Error("The pull request did not produce a dedicated worktree.");
         }
-        const existingWorkspace = worktreeWorkspaces.find(
-          (workspace) =>
-            workspace.projectId === project.id && workspace.path === prepared.worktreePath,
-        );
+        const existingWorkspace =
+          findWorkspaceForPullRequest(worktreeWorkspaces, project.id, prepared.pullRequest) ??
+          worktreeWorkspaces.find(
+            (workspace) =>
+              workspace.projectId === project.id && workspace.path === prepared.worktreePath,
+          );
         if (existingWorkspace) {
           await handleCreateWorkspaceConversation(existingWorkspace.id, project);
           return;
@@ -5428,14 +5432,20 @@ export default function Sidebar() {
     })),
   });
   const prByThreadId = useMemo(() => {
-    const statusByCwd = new Map<string, GitStatusResult>();
+    const statusByCwd = new Map<
+      string,
+      { status: GitStatusResult | undefined; unavailable: boolean }
+    >();
     for (let index = 0; index < threadGitStatusTargets.length; index += 1) {
       const target = threadGitStatusTargets[index];
       if (!target) continue;
-      const status = threadGitStatusQueries[index]?.data;
-      if (status) {
-        statusByCwd.set(target.cwd, status);
-      }
+      const query = threadGitStatusQueries[index];
+      const status = query?.data;
+      statusByCwd.set(target.cwd, {
+        status,
+        unavailable:
+          status === undefined || query?.error != null || status.prUnavailable === true,
+      });
     }
 
     const storedPrByThreadId = new Map<ThreadId, ThreadPr>();
@@ -5454,11 +5464,19 @@ export default function Sidebar() {
 
     const map = new Map<ThreadId, ThreadPr>();
     for (const target of threadGitTargets) {
-      const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
+      const statusResult = target.cwd ? statusByCwd.get(target.cwd) : undefined;
+      const status = statusResult?.status;
       const branchMatches =
         target.branch !== null && status?.branch !== null && status?.branch === target.branch;
       const livePr = branchMatches ? (status?.pr ?? null) : null;
-      map.set(target.threadId, livePr ?? storedPrByThreadId.get(target.threadId) ?? null);
+      map.set(
+        target.threadId,
+        resolvePullRequestAssociation({
+          live: livePr,
+          persisted: storedPrByThreadId.get(target.threadId) ?? target.lastKnownPr,
+          liveUnavailable: statusResult?.unavailable !== false || !branchMatches,
+        }),
+      );
     }
     return map;
   }, [

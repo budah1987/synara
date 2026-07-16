@@ -23,6 +23,7 @@ import { PullRequestConflictIcon } from "../../pullRequest/pullRequestStatePrese
 import { PR_QUIET_INK_CLASS_NAME } from "../../pullRequest/pullRequestText";
 import { appendComposerPromptText } from "~/lib/chatReferences";
 import { gitPullRequestSnapshotQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import { resolvePullRequestAssociation } from "~/lib/gitPullRequestAssociation";
 import {
   ArrowUpRightIcon,
   ChatBubbleIcon,
@@ -219,7 +220,12 @@ export function EnvironmentPullRequestSection({
     gitStatusQueryOptions(gitCwd, githubAccount),
   );
   const persistedPr = activeThread?.lastKnownPr ?? null;
-  const pr = gitStatus?.pr ?? (gitStatusError ? persistedPr : null);
+  const pr = resolvePullRequestAssociation({
+    live: gitStatus?.pr ?? null,
+    persisted: persistedPr,
+    liveUnavailable:
+      gitStatus === undefined || gitStatusError !== null || gitStatus.prUnavailable === true,
+  });
 
   const snapshotQuery = useQuery(
     gitPullRequestSnapshotQueryOptions({
