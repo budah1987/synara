@@ -1307,6 +1307,20 @@ function EventRouter() {
         store.upsertRun(event.server);
       } else {
         store.removeRun({ projectId: event.projectId, workspaceId: event.workspaceId });
+        if (event.reason === "exited") {
+          const description =
+            event.message ??
+            (event.exitCode !== undefined && event.exitCode !== null
+              ? `The process exited with code ${event.exitCode}.`
+              : event.exitSignal !== undefined && event.exitSignal !== null
+                ? `The process exited from signal ${event.exitSignal}.`
+                : "The process exited unexpectedly.");
+          toastManager.add({
+            type: "error",
+            title: "Dev server stopped",
+            description,
+          });
+        }
       }
       invalidateLocalServers();
     });
