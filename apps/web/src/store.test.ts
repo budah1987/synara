@@ -4059,6 +4059,7 @@ describe("store read model sync", () => {
           scripts: [],
           repositoryIdentity: "repository-1",
           defaultTargetRef: "main",
+          githubAccount: { host: "github.com", login: "octocat" },
           createdAt: now,
           updatedAt: now,
         },
@@ -4082,6 +4083,23 @@ describe("store read model sync", () => {
           handoff: null,
           session: null,
         },
+        {
+          id: ThreadId.makeUnsafe("thread-2"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspaceId,
+          title: "Conversation two",
+          modelSelection: { provider: "codex", model: "gpt-5.5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: "worktree",
+          branch: "synara/workspace-1",
+          worktreePath: "/tmp/workspace-1",
+          latestTurn: null,
+          createdAt: now,
+          updatedAt: now,
+          handoff: null,
+          session: null,
+        },
       ],
     } satisfies OrchestrationWorkspaceShellSnapshot;
 
@@ -4090,14 +4108,39 @@ describe("store read model sync", () => {
     expect(hydrated.projects[0]).toMatchObject({
       repositoryIdentity: "repository-1",
       defaultTargetRef: "main",
+      githubAccount: { host: "github.com", login: "octocat" },
     });
     expect(hydrated.threads[0]?.workspaceId).toBe(workspaceId);
 
+    const lastKnownPr = {
+      number: 42,
+      title: "Ship workspace updates",
+      url: "https://github.com/example/repo/pull/42",
+      baseBranch: "release",
+      headBranch: "synara/workspace-1-renamed",
+      state: "open" as const,
+    };
     const updated = applyWorkspaceShellEvent(hydrated, {
       kind: "workspace-upserted",
       sequence: 6,
-      workspace: { ...workspace, title: "Renamed workspace", mutationRevision: 2 },
+      workspace: {
+        ...workspace,
+        title: "Renamed workspace",
+        branch: "synara/workspace-1-renamed",
+        lastKnownPr,
+        mutationRevision: 2,
+        updatedAt: "2026-07-13T00:01:00.000Z",
+      },
     });
     expect(updated.worktreeWorkspaces?.[0]?.title).toBe("Renamed workspace");
+    expect(updated.threads).toHaveLength(2);
+    for (const thread of updated.threads) {
+      expect(thread).toMatchObject({
+        workspaceId,
+        branch: "synara/workspace-1-renamed",
+        associatedWorktreeBranch: "synara/workspace-1-renamed",
+        lastKnownPr,
+      });
+    }
   });
 });

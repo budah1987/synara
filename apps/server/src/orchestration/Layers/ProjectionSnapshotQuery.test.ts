@@ -304,6 +304,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           isPinned: false,
           repositoryIdentity: null,
           defaultTargetRef: null,
+          githubAccount: null,
         },
       ]);
       assert.deepEqual(snapshot.threads, [
@@ -1046,6 +1047,58 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.number, 1);
       assert.equal(shellSnapshot.threads[0]?.lastKnownPr?.headBranch, "synara/greeting-1");
+    }),
+  );
+
+  it.effect("decodes persisted GitHub accounts across project read paths", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          kind,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          github_account_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-github-account',
+          'project',
+          'Account Project',
+          '/tmp/account-project',
+          NULL,
+          '[]',
+          '{"host":"github.example.com","login":"octocat"}',
+          '2026-07-15T00:00:00.000Z',
+          '2026-07-15T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      const expectedAccount = { host: "github.example.com", login: "octocat" };
+      const snapshot = yield* snapshotQuery.getSnapshot();
+      const workspaceShellSnapshot = yield* snapshotQuery.getWorkspaceShellSnapshot!();
+      const projectShell = yield* snapshotQuery.getProjectShellById(
+        asProjectId("project-github-account"),
+      );
+      const activeProject =
+        yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/account-project");
+
+      assert.deepStrictEqual(snapshot.projects[0]?.githubAccount, expectedAccount);
+      assert.deepStrictEqual(workspaceShellSnapshot.projects[0]?.githubAccount, expectedAccount);
+      assert.deepStrictEqual(Option.getOrNull(projectShell)?.githubAccount, expectedAccount);
+      assert.deepStrictEqual(Option.getOrNull(activeProject)?.githubAccount, expectedAccount);
     }),
   );
 

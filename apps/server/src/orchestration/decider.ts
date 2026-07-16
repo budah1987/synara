@@ -16,6 +16,7 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
+import { pullRequestsMatch } from "@synara/shared/pullRequest";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -329,6 +330,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           isPinned: command.isPinned,
           repositoryIdentity: command.repositoryIdentity ?? null,
           defaultTargetRef: command.defaultTargetRef ?? null,
+          githubAccount: command.githubAccount ?? null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -392,6 +394,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.defaultTargetRef !== undefined
             ? { defaultTargetRef: command.defaultTargetRef }
             : {}),
+          ...(command.githubAccount !== undefined ? { githubAccount: command.githubAccount } : {}),
           updatedAt: occurredAt,
         },
       };
@@ -546,6 +549,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.lastKnownPr) {
+        const existingPrWorkspace = (readModel.workspaces ?? []).find(
+          (workspace) =>
+            workspace.projectId === command.projectId &&
+            workspace.deletedAt === null &&
+            workspace.state !== "archived" &&
+            workspace.lastKnownPr !== null &&
+            pullRequestsMatch(workspace.lastKnownPr, command.lastKnownPr!),
+        );
+        if (existingPrWorkspace) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Pull request #${command.lastKnownPr.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
+          });
+        }
+      }
       const existingPath = (readModel.workspaces ?? []).find(
         (workspace) =>
           workspace.projectId === command.projectId &&
@@ -700,7 +719,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (
         command.title === undefined &&
         command.branch === undefined &&
-        command.targetRef === undefined
+        command.targetRef === undefined &&
+        command.lastKnownPr === undefined
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -716,6 +736,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Workspace '${workspace.id}' cannot change git refs while ${workspace.state}.`,
         });
       }
+      if (command.lastKnownPr) {
+        const existingPrWorkspace = (readModel.workspaces ?? []).find(
+          (candidate) =>
+            candidate.id !== workspace.id &&
+            candidate.projectId === workspace.projectId &&
+            candidate.deletedAt === null &&
+            candidate.state !== "archived" &&
+            candidate.lastKnownPr !== null &&
+            pullRequestsMatch(candidate.lastKnownPr, command.lastKnownPr!),
+        );
+        if (existingPrWorkspace) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Pull request #${command.lastKnownPr.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
+          });
+        }
+      }
       return {
         ...withEventBase({
           aggregateKind: "workspace",
@@ -729,6 +766,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.targetRef !== undefined ? { targetRef: command.targetRef } : {}),
+          ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
           mutationRevision: workspace.mutationRevision + 1,
           updatedAt: command.updatedAt,
         },

@@ -3,6 +3,7 @@
 // Exports: Runtime UI types consumed across store, routes, and components.
 
 import type {
+  GitHubAccountSelection,
   ModelSelection,
   MessageDispatchOrigin,
   OrchestrationMessageSource,
@@ -172,6 +173,7 @@ export interface Project {
   cwd: string;
   repositoryIdentity?: string | null;
   defaultTargetRef?: string | null;
+  githubAccount?: GitHubAccountSelection | null;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;

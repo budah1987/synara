@@ -3,7 +3,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SchemaGetter from "effect/SchemaGetter";
 
-import { ModelSelection, ProjectScript } from "@synara/contracts";
+import { GitHubAccountSelection, ModelSelection, ProjectScript } from "@synara/contracts";
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionProjectInput,
@@ -25,6 +25,7 @@ const ProjectionProjectDbRow = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: SqliteBoolean,
+    githubAccount: Schema.NullOr(Schema.fromJsonString(GitHubAccountSelection)),
   }),
 );
 type ProjectionProjectDbRow = typeof ProjectionProjectDbRow.Type;
@@ -46,6 +47,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned,
           repository_identity,
           default_target_ref,
+          github_account_json,
           created_at,
           updated_at,
           deleted_at
@@ -60,6 +62,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.isPinned ? 1 : 0},
           ${row.repositoryIdentity ?? null},
           ${row.defaultTargetRef ?? null},
+          ${row.githubAccount === null ? null : JSON.stringify(row.githubAccount)},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
@@ -74,6 +77,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned = excluded.is_pinned,
           repository_identity = excluded.repository_identity,
           default_target_ref = excluded.default_target_ref,
+          github_account_json = excluded.github_account_json,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           deleted_at = excluded.deleted_at
@@ -95,6 +99,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned AS "isPinned",
           repository_identity AS "repositoryIdentity",
           default_target_ref AS "defaultTargetRef",
+          github_account_json AS "githubAccount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -118,6 +123,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           is_pinned AS "isPinned",
           repository_identity AS "repositoryIdentity",
           default_target_ref AS "defaultTargetRef",
+          github_account_json AS "githubAccount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"

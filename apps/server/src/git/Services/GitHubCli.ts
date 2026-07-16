@@ -70,6 +70,10 @@ export interface GitHubRepositoryCloneUrls {
   readonly sshUrl: string;
 }
 
+export interface GitHubBranchLookupResult {
+  readonly url: string | null;
+}
+
 export interface GitHubPullRequestReviewCommentsResult {
   readonly comments: ReadonlyArray<GitPullRequestComment>;
   readonly truncated: boolean;
@@ -229,6 +233,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
@@ -239,6 +244,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
@@ -248,6 +254,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly filter: GitPullRequestListFilter;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
   /**
@@ -256,6 +263,7 @@ export interface GitHubCliShape {
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**
@@ -265,6 +273,7 @@ export interface GitHubCliShape {
   readonly getPullRequestWithChecks: (input: {
     readonly cwd: string;
     readonly reference: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<
     {
       readonly summary: GitHubPullRequestSummary;
@@ -284,6 +293,7 @@ export interface GitHubCliShape {
     readonly owner: string;
     readonly repo: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
@@ -294,6 +304,14 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
+
+  /** Verify a branch exists on GitHub and return GitHub's authoritative browser URL. */
+  readonly getBranchBrowserUrl: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly branch: string;
+    readonly account?: GitHubAccountSelection;
+  }) => Effect.Effect<GitHubBranchLookupResult, GitHubCliError>;
 
   /**
    * List repositories available to the authenticated GitHub account, including
@@ -313,6 +331,7 @@ export interface GitHubCliShape {
     readonly headSelector: string;
     readonly title: string;
     readonly bodyFile: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**
@@ -320,6 +339,7 @@ export interface GitHubCliShape {
    */
   readonly getDefaultBranch: (input: {
     readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<string | null, GitHubCliError>;
 
   /**
@@ -329,6 +349,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
     readonly force?: boolean;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 }
 

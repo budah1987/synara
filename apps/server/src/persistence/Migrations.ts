@@ -71,6 +71,7 @@ import Migration0052 from "./Migrations/052_ProjectionThreadUserMessageSummaryIn
 import Migration0053 from "./Migrations/053_BackfillThreadActivitySequence.ts";
 import Migration0054 from "./Migrations/054_ProjectPullRequestPins.ts";
 import Migration0055 from "./Migrations/055_WorktreeWorkspaces.ts";
+import Migration0056 from "./Migrations/055_ProjectionProjectsGitHubAccount.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -138,6 +139,7 @@ export const migrationEntries = [
   [53, "BackfillThreadActivitySequence", Migration0053],
   [54, "ProjectPullRequestPins", Migration0054],
   [55, "WorktreeWorkspaces", Migration0055],
+  [56, "ProjectionProjectsGitHubAccount", Migration0056],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

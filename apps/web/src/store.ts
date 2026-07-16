@@ -666,6 +666,7 @@ function normalizeProjectFromReadModel(
     previous.cwd === incoming.workspaceRoot &&
     (previous.repositoryIdentity ?? null) === (incoming.repositoryIdentity ?? null) &&
     (previous.defaultTargetRef ?? null) === (incoming.defaultTargetRef ?? null) &&
+    deepEqualJson(previous.githubAccount ?? null, incoming.githubAccount ?? null) &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
@@ -686,6 +687,7 @@ function normalizeProjectFromReadModel(
     cwd: incoming.workspaceRoot,
     repositoryIdentity: incoming.repositoryIdentity ?? null,
     defaultTargetRef: incoming.defaultTargetRef ?? null,
+    githubAccount: incoming.githubAccount ?? null,
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
@@ -716,6 +718,7 @@ function normalizeProjectFromShell(
     "repositoryIdentity" in incoming ? (incoming.repositoryIdentity ?? null) : null;
   const defaultTargetRef =
     "defaultTargetRef" in incoming ? (incoming.defaultTargetRef ?? null) : null;
+  const githubAccount = "githubAccount" in incoming ? (incoming.githubAccount ?? null) : null;
 
   if (
     previous &&
@@ -728,6 +731,7 @@ function normalizeProjectFromShell(
     previous.cwd === incoming.workspaceRoot &&
     (previous.repositoryIdentity ?? null) === repositoryIdentity &&
     (previous.defaultTargetRef ?? null) === defaultTargetRef &&
+    deepEqualJson(previous.githubAccount ?? null, githubAccount) &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
     (previous.isPinned ?? false) === (incoming.isPinned ?? false) &&
@@ -748,6 +752,7 @@ function normalizeProjectFromShell(
     cwd: incoming.workspaceRoot,
     repositoryIdentity,
     defaultTargetRef,
+    githubAccount,
     defaultModelSelection,
     expanded,
     isPinned: incoming.isPinned ?? false,
@@ -3220,6 +3225,9 @@ function applyOrchestrationEvent(
         defaultModelSelection: event.payload.defaultModelSelection,
         scripts: event.payload.scripts,
         isPinned: event.payload.isPinned ?? false,
+        repositoryIdentity: event.payload.repositoryIdentity ?? null,
+        defaultTargetRef: event.payload.defaultTargetRef ?? null,
+        githubAccount: event.payload.githubAccount ?? null,
         createdAt: event.payload.createdAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -3243,6 +3251,18 @@ function applyOrchestrationEvent(
             : existingProject.defaultModelSelection,
         scripts: event.payload.scripts ?? existingProject.scripts,
         isPinned: event.payload.isPinned ?? existingProject.isPinned ?? false,
+        repositoryIdentity:
+          event.payload.repositoryIdentity !== undefined
+            ? event.payload.repositoryIdentity
+            : (existingProject.repositoryIdentity ?? null),
+        defaultTargetRef:
+          event.payload.defaultTargetRef !== undefined
+            ? event.payload.defaultTargetRef
+            : (existingProject.defaultTargetRef ?? null),
+        githubAccount:
+          event.payload.githubAccount !== undefined
+            ? event.payload.githubAccount
+            : (existingProject.githubAccount ?? null),
         createdAt: existingProject.createdAt ?? event.payload.updatedAt,
         updatedAt: event.payload.updatedAt,
         deletedAt: null,
@@ -4294,7 +4314,19 @@ export function applyWorkspaceShellEvent(
       } else {
         worktreeWorkspaces[existingIndex] = event.workspace;
       }
-      return { ...state, worktreeWorkspaces, workspaceProtocolVersion: 2 };
+      let nextState: AppState = { ...state, worktreeWorkspaces, workspaceProtocolVersion: 2 };
+      for (const thread of state.threads) {
+        if (thread.workspaceId !== event.workspace.id) continue;
+        nextState = applyThreadUpdate(nextState, thread.id, (current) => ({
+          ...current,
+          lastKnownPr: event.workspace.lastKnownPr,
+          branch: event.workspace.branch ?? current.branch,
+          associatedWorktreeBranch:
+            event.workspace.branch ?? current.associatedWorktreeBranch ?? null,
+          updatedAt: event.workspace.updatedAt,
+        }));
+      }
+      return nextState;
     }
     case "workspace-removed":
       return {

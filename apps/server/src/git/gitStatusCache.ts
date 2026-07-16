@@ -49,6 +49,7 @@ export function splitRemoteStatus(status: GitStatusResult): GitStatusRemoteResul
     upstreamBranch: status.upstreamBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
+    ...(status.publication ? { publication: status.publication } : {}),
     pr: status.pr,
   };
 }
@@ -62,6 +63,7 @@ export function splitRemoteStatusDetails(
     upstreamBranch: status.upstreamBranch,
     aheadCount: status.aheadCount,
     behindCount: status.behindCount,
+    ...(cachedRemote?.publication ? { publication: cachedRemote.publication } : {}),
     pr: cachedRemote?.pr ?? null,
   };
 }

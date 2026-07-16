@@ -696,21 +696,30 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.targetRef !== undefined
               ? { targetRef: event.payload.targetRef }
               : {}),
+            ...(event.payload.lastKnownPr !== undefined
+              ? { lastKnownPr: event.payload.lastKnownPr }
+              : {}),
             mutationRevision: event.payload.mutationRevision,
             updatedAt: event.payload.updatedAt,
           });
           const nextBranch = event.payload.branch;
-          if (nextBranch === undefined) return;
+          const nextPr = event.payload.lastKnownPr;
+          if (nextBranch === undefined && nextPr === undefined) return;
           const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
             projectId: existing.value.projectId,
           });
           yield* Effect.forEach(
-            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            workspaceThreads.filter(
+              (thread) =>
+                thread.workspaceId === event.payload.workspaceId && thread.deletedAt === null,
+            ),
             (thread) =>
               projectionThreadRepository.upsert({
                 ...thread,
-                branch: nextBranch,
-                associatedWorktreeBranch: nextBranch,
+                ...(nextBranch !== undefined
+                  ? { branch: nextBranch, associatedWorktreeBranch: nextBranch }
+                  : {}),
+                ...(nextPr !== undefined ? { lastKnownPr: nextPr } : {}),
                 updatedAt: event.payload.updatedAt,
               }),
             { concurrency: 1 },

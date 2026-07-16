@@ -39,6 +39,10 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+const STATUS_DETAIL_LIMIT = 500;
+const STATUS_RETAINED_OUTPUT_BYTES = 64_000;
+const STATUS_NUMSTAT_MAX_OUTPUT_BYTES = 4_500_000;
+const STATUS_RECORD_MAX_CHARS = 64_000;
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
@@ -56,7 +60,15 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
   upstreamRef: null,
   upstreamBranch: null,
   hasWorkingTreeChanges: false,
-  workingTree: { files: [], insertions: 0, deletions: 0 },
+  workingTree: {
+    files: [],
+    insertions: 0,
+    deletions: 0,
+    totalFiles: 0,
+    isPartial: false,
+    truncated: false,
+    statisticsState: "complete" as const,
+  },
   hasUpstream: false,
   aheadCount: 0,
   behindCount: 0,
@@ -76,6 +88,8 @@ class StatusUpstreamRefreshCacheKey extends Data.Class<{
 
 interface ExecuteGitOptions {
   timeoutMs?: number | undefined;
+  maxOutputBytes?: number | undefined;
+  truncateOutput?: boolean | undefined;
   allowNonZeroExit?: boolean | undefined;
   fallbackErrorMessage?: string | undefined;
   env?: NodeJS.ProcessEnv | undefined;
@@ -88,6 +102,24 @@ type WorkingTreeStatSummary = {
   files: WorkingTreeFileStat[];
   insertions: number;
   deletions: number;
+};
+
+type BoundedStatusEntry = {
+  path: string;
+  statusCode: string;
+  isUntracked: boolean;
+};
+
+type BoundedStatusResult = {
+  branch: string | null;
+  upstreamRef: string | null;
+  aheadCount: number;
+  behindCount: number;
+  hasWorkingTreeChanges: boolean;
+  entries: BoundedStatusEntry[];
+  totalFiles: number | null;
+  truncated: boolean;
+  isPartial: boolean;
 };
 
 function parseBranchAb(value: string): { ahead: number; behind: number } {
@@ -106,34 +138,24 @@ function normalizeConfiguredMergeBranch(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
-function normalizeNumstatPath(rawPath: string): string {
-  const renameArrowIndex = rawPath.indexOf(" => ");
-  if (renameArrowIndex < 0) return rawPath;
+function parseNulNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
+  const records = stdout.split("\0");
+  const entries: WorkingTreeFileStat[] = [];
+  for (let index = 0; index < records.length - 1; index += 1) {
+    const record = records[index] ?? "";
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab < 0 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (firstTab < 0 || secondTab < 0) continue;
 
-  const compactRenameMatch = /^(.*)\{[^{}]* => ([^{}]*)\}(.*)$/.exec(rawPath);
-  if (compactRenameMatch) {
-    const [, prefix = "", targetSegment = "", suffix = ""] = compactRenameMatch;
-    const normalized = `${prefix}${targetSegment}${suffix}`.trim();
-    return normalized.length > 0 ? normalized : rawPath;
-  }
+    const added = Number.parseInt(record.slice(0, firstTab), 10);
+    const deleted = Number.parseInt(record.slice(firstTab + 1, secondTab), 10);
+    const inlinePath = record.slice(secondTab + 1);
+    const filePath = inlinePath.length > 0 ? inlinePath : (records[index + 2] ?? "");
+    if (inlinePath.length === 0) index += 2;
+    if (filePath.length === 0) continue;
 
-  const normalized = rawPath.slice(renameArrowIndex + " => ".length).trim();
-  return normalized.length > 0 ? normalized : rawPath;
-}
-
-function parseNumstatEntries(stdout: string): Array<WorkingTreeFileStat> {
-  const entries: Array<WorkingTreeFileStat> = [];
-  for (const line of stdout.split(/\r?\n/g)) {
-    if (line.trim().length === 0) continue;
-    const [addedRaw, deletedRaw, ...pathParts] = line.split("\t");
-    const rawPath =
-      pathParts.length > 1 ? (pathParts.at(-1) ?? "").trim() : pathParts.join("\t").trim();
-    if (rawPath.length === 0) continue;
-    const added = Number.parseInt(addedRaw ?? "0", 10);
-    const deleted = Number.parseInt(deletedRaw ?? "0", 10);
-    const normalizedPath = normalizeNumstatPath(rawPath);
     entries.push({
-      path: normalizedPath.length > 0 ? normalizedPath : rawPath,
+      path: filePath,
       insertions: Number.isFinite(added) ? added : 0,
       deletions: Number.isFinite(deleted) ? deleted : 0,
     });
@@ -178,26 +200,140 @@ function hasNodeErrorCode(cause: unknown, code: string): boolean {
   );
 }
 
-function parsePorcelainPath(line: string): string | null {
-  if (line.startsWith("? ") || line.startsWith("! ")) {
-    const simple = line.slice(2).trim();
-    return simple.length > 0 ? simple : null;
+function sliceAfterSpaces(value: string, spaceCount: number): string | null {
+  let offset = 0;
+  for (let index = 0; index < spaceCount; index += 1) {
+    offset = value.indexOf(" ", offset);
+    if (offset < 0) return null;
+    offset += 1;
   }
+  return offset < value.length ? value.slice(offset) : null;
+}
 
-  if (!(line.startsWith("1 ") || line.startsWith("2 ") || line.startsWith("u "))) {
-    return null;
-  }
+function makeBoundedStatusParser(detailLimit: number) {
+  const decoder = new TextDecoder();
+  const entries: BoundedStatusEntry[] = [];
+  const retainedPaths = new Set<string>();
+  let buffer = "";
+  let branch: string | null = null;
+  let upstreamRef: string | null = null;
+  let aheadCount = 0;
+  let behindCount = 0;
+  let hasWorkingTreeChanges = false;
+  let totalFiles = 0;
+  let truncated = false;
+  let malformed = false;
+  let expectsRenameSource = false;
+  let discardingOversizedRecord = false;
 
-  const tabIndex = line.indexOf("\t");
-  if (tabIndex >= 0) {
-    const fromTab = line.slice(tabIndex + 1);
-    const [filePath] = fromTab.split("\t");
-    return filePath?.trim().length ? filePath.trim() : null;
-  }
+  const retainEntry = (path: string, statusCode: string, isUntracked: boolean) => {
+    hasWorkingTreeChanges = true;
+    totalFiles += 1;
+    if (retainedPaths.has(path)) return;
+    if (entries.length >= detailLimit) {
+      truncated = true;
+      return;
+    }
+    retainedPaths.add(path);
+    entries.push({ path, statusCode, isUntracked });
+  };
 
-  const parts = line.trim().split(/\s+/g);
-  const filePath = parts.at(-1) ?? "";
-  return filePath.length > 0 ? filePath : null;
+  const consumeRecord = (record: string) => {
+    if (expectsRenameSource) {
+      expectsRenameSource = false;
+      return;
+    }
+    if (record.startsWith("# branch.head ")) {
+      const value = record.slice("# branch.head ".length);
+      branch = value.startsWith("(") ? null : value || null;
+      return;
+    }
+    if (record.startsWith("# branch.upstream ")) {
+      upstreamRef = record.slice("# branch.upstream ".length) || null;
+      return;
+    }
+    if (record.startsWith("# branch.ab ")) {
+      const parsed = parseBranchAb(record.slice("# branch.ab ".length));
+      aheadCount = parsed.ahead;
+      behindCount = parsed.behind;
+      return;
+    }
+    if (record.startsWith("#") || record.startsWith("! ")) return;
+    if (record.startsWith("? ")) {
+      const path = record.slice(2);
+      if (path.length > 0) retainEntry(path, "??", true);
+      else malformed = true;
+      return;
+    }
+
+    const recordType = record.slice(0, 2);
+    const path =
+      recordType === "1 "
+        ? sliceAfterSpaces(record, 8)
+        : recordType === "2 "
+          ? sliceAfterSpaces(record, 9)
+          : recordType === "u "
+            ? sliceAfterSpaces(record, 10)
+            : null;
+    if (path === null) {
+      if (record.length > 0) {
+        hasWorkingTreeChanges = true;
+        malformed = true;
+      }
+      return;
+    }
+
+    retainEntry(path, record.slice(2, 4), false);
+    expectsRenameSource = recordType === "2 ";
+  };
+
+  const consumeBuffer = () => {
+    let separatorIndex = buffer.indexOf("\0");
+    while (separatorIndex >= 0) {
+      consumeRecord(buffer.slice(0, separatorIndex));
+      buffer = buffer.slice(separatorIndex + 1);
+      separatorIndex = buffer.indexOf("\0");
+    }
+  };
+
+  return {
+    push(chunk: Uint8Array) {
+      let decoded = decoder.decode(chunk, { stream: true });
+      if (discardingOversizedRecord) {
+        const separatorIndex = decoded.indexOf("\0");
+        if (separatorIndex < 0) return;
+        decoded = decoded.slice(separatorIndex + 1);
+        discardingOversizedRecord = false;
+      }
+      buffer += decoded;
+      consumeBuffer();
+      if (buffer.length > STATUS_RECORD_MAX_CHARS) {
+        buffer = "";
+        hasWorkingTreeChanges = true;
+        malformed = true;
+        discardingOversizedRecord = true;
+      }
+    },
+    finish(): BoundedStatusResult {
+      buffer += decoder.decode();
+      consumeBuffer();
+      if (buffer.length > 0 || expectsRenameSource || discardingOversizedRecord) {
+        hasWorkingTreeChanges = true;
+        malformed = true;
+      }
+      return {
+        branch,
+        upstreamRef,
+        aheadCount,
+        behindCount,
+        hasWorkingTreeChanges,
+        entries,
+        totalFiles: malformed ? null : totalFiles,
+        truncated,
+        isPartial: malformed || truncated,
+      };
+    },
+  };
 }
 
 function countTextLines(contents: Uint8Array): number {
@@ -611,6 +747,8 @@ const collectOutput = Effect.fn(function* <E>(
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
   stream: Stream.Stream<Uint8Array, E>,
   maxOutputBytes: number,
+  truncateOutput: boolean,
+  onChunk: ((chunk: Uint8Array) => Effect.Effect<void, never>) | undefined,
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
 ): Effect.fn.Return<string, GitCommandError> {
   const decoder = new TextDecoder();
@@ -641,8 +779,14 @@ const collectOutput = Effect.fn(function* <E>(
 
   yield* Stream.runForEach(stream, (chunk) =>
     Effect.gen(function* () {
+      if (onChunk) {
+        yield* onChunk(chunk);
+      }
       bytes += chunk.byteLength;
       if (bytes > maxOutputBytes) {
+        if (truncateOutput) {
+          return;
+        }
         return yield* new GitCommandError({
           operation: input.operation,
           command: quoteGitCommand(input.args),
@@ -652,15 +796,19 @@ const collectOutput = Effect.fn(function* <E>(
       }
       const decoded = decoder.decode(chunk, { stream: true });
       text += decoded;
-      lineBuffer += decoded;
-      yield* emitCompleteLines(false);
+      if (onLine) {
+        lineBuffer += decoded;
+        yield* emitCompleteLines(false);
+      }
     }),
   ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.")));
 
   const remainder = decoder.decode();
   text += remainder;
-  lineBuffer += remainder;
-  yield* emitCompleteLines(true);
+  if (onLine) {
+    lineBuffer += remainder;
+    yield* emitCompleteLines(true);
+  }
   return text;
 });
 
@@ -730,12 +878,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 commandInput,
                 child.stdout,
                 maxOutputBytes,
+                input.truncateOutput ?? false,
+                input.progress?.onStdoutChunk,
                 input.progress?.onStdoutLine,
               ),
               collectOutput(
                 commandInput,
                 child.stderr,
                 maxOutputBytes,
+                false,
+                undefined,
                 input.progress?.onStderrLine,
               ),
               child.exitCode.pipe(
@@ -796,6 +948,8 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         args,
         allowNonZeroExit: true,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        ...(options.maxOutputBytes !== undefined ? { maxOutputBytes: options.maxOutputBytes } : {}),
+        ...(options.truncateOutput !== undefined ? { truncateOutput: options.truncateOutput } : {}),
         ...(options.env ? { env: options.env } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
       }).pipe(
@@ -841,6 +995,45 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         Effect.map((result) => result.stdout),
       );
 
+    const readBoundedStatus = (cwd: string): Effect.Effect<BoundedStatusResult, GitCommandError> =>
+      Effect.gen(function* () {
+        const parser = makeBoundedStatusParser(STATUS_DETAIL_LIMIT);
+        let receivedChunk = false;
+        const args = [
+          "status",
+          "--porcelain=2",
+          "--branch",
+          "--untracked-files=all",
+          "-z",
+        ] as const;
+        const result = yield* execute({
+          operation: "GitCore.statusDetails.status",
+          cwd,
+          args,
+          maxOutputBytes: STATUS_RETAINED_OUTPUT_BYTES,
+          truncateOutput: true,
+          progress: {
+            onStdoutChunk: (chunk) =>
+              Effect.sync(() => {
+                receivedChunk = true;
+                parser.push(chunk);
+              }),
+          },
+        });
+        if (result.code !== 0) {
+          return yield* createGitCommandError(
+            "GitCore.statusDetails.status",
+            cwd,
+            args,
+            result.stderr.trim() || `${commandLabel(args)} failed: code=${result.code}`,
+          );
+        }
+        if (!receivedChunk && result.stdout.length > 0) {
+          parser.push(new TextEncoder().encode(result.stdout));
+        }
+        return parser.finish();
+      });
+
     const readMoveAwareWorkingTreeSummary = (
       cwd: string,
     ): Effect.Effect<WorkingTreeStatSummary | null, never> =>
@@ -884,15 +1077,16 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           const numstatStdout = yield* executeGit(
             "GitCore.statusDetails.moveAwareNumstat",
             cwd,
-            ["diff", "--cached", "--numstat", "--find-renames"],
+            ["diff", "--cached", "--numstat", "-z", "--find-renames"],
             {
               env: tempIndexEnv,
               allowNonZeroExit: true,
               timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
+              maxOutputBytes: STATUS_NUMSTAT_MAX_OUTPUT_BYTES,
             },
           ).pipe(Effect.map((result) => result.stdout));
 
-          return summarizeNumstatEntries(parseNumstatEntries(numstatStdout));
+          return summarizeNumstatEntries(parseNulNumstatEntries(numstatStdout));
         }),
       ).pipe(
         Effect.catch((cause) =>
@@ -1336,63 +1530,29 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           Effect.ignoreCause({ log: true }),
         );
 
-        const statusStdout = yield* runGitStdout("GitCore.statusDetails.status", cwd, [
-          "status",
-          "--porcelain=2",
-          "--branch",
-        ]).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
-        if (statusStdout === null) {
+        const parsedStatus = yield* readBoundedStatus(cwd).pipe(
+          Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)),
+        );
+        if (parsedStatus === null) {
           return NON_REPOSITORY_STATUS_DETAILS;
         }
 
-        let branch: string | null = null;
-        let upstreamRef: string | null = null;
+        const branch = parsedStatus.branch;
+        const upstreamRef = parsedStatus.upstreamRef;
         let upstreamBranch: string | null = null;
-        let aheadCount = 0;
-        let behindCount = 0;
-        let hasWorkingTreeChanges = false;
-        let hasTrackedDeletion = false;
-        let hasUntrackedDirectory = false;
-        const changedFilesWithoutNumstat = new Set<string>();
-        const untrackedFilesWithoutNumstat = new Set<string>();
-
-        for (const line of statusStdout.split(/\r?\n/g)) {
-          if (line.startsWith("# branch.head ")) {
-            const value = line.slice("# branch.head ".length).trim();
-            branch = value.startsWith("(") ? null : value;
-            continue;
-          }
-          if (line.startsWith("# branch.upstream ")) {
-            const value = line.slice("# branch.upstream ".length).trim();
-            upstreamRef = value.length > 0 ? value : null;
-            continue;
-          }
-          if (line.startsWith("# branch.ab ")) {
-            const value = line.slice("# branch.ab ".length).trim();
-            const parsed = parseBranchAb(value);
-            aheadCount = parsed.ahead;
-            behindCount = parsed.behind;
-            continue;
-          }
-          if (line.trim().length > 0 && !line.startsWith("#")) {
-            hasWorkingTreeChanges = true;
-            const statusCode =
-              line.startsWith("1 ") || line.startsWith("2 ") ? line.slice(2, 4) : "";
-            if (statusCode.includes("D")) {
-              hasTrackedDeletion = true;
-            }
-            const pathValue = parsePorcelainPath(line);
-            if (pathValue) {
-              changedFilesWithoutNumstat.add(pathValue);
-              if (line.startsWith("? ")) {
-                untrackedFilesWithoutNumstat.add(pathValue);
-                if (pathValue.endsWith("/")) {
-                  hasUntrackedDirectory = true;
-                }
-              }
-            }
-          }
-        }
+        let aheadCount = parsedStatus.aheadCount;
+        let behindCount = parsedStatus.behindCount;
+        const hasWorkingTreeChanges = parsedStatus.hasWorkingTreeChanges;
+        const changedFilesWithoutNumstat = new Set(parsedStatus.entries.map((entry) => entry.path));
+        const untrackedFilesWithoutNumstat = new Set(
+          parsedStatus.entries.filter((entry) => entry.isUntracked).map((entry) => entry.path),
+        );
+        const hasTrackedDeletion = parsedStatus.entries.some((entry) =>
+          entry.statusCode.includes("D"),
+        );
+        const hasUntrackedDirectory = parsedStatus.entries.some(
+          (entry) => entry.isUntracked && entry.path.endsWith("/"),
+        );
 
         if (branch && upstreamRef) {
           upstreamBranch = yield* runGitStdout(
@@ -1434,6 +1594,31 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             branch !== null && defaultBranchName !== null && branch === defaultBranchName,
         } as const;
 
+        const boundedFiles = parsedStatus.entries
+          .map((entry) => ({ path: entry.path, insertions: 0, deletions: 0 }))
+          .toSorted((a, b) => a.path.localeCompare(b.path));
+        if (parsedStatus.isPartial) {
+          return {
+            ...repoMetadata,
+            branch,
+            upstreamRef,
+            upstreamBranch,
+            hasWorkingTreeChanges,
+            workingTree: {
+              files: boundedFiles,
+              insertions: 0,
+              deletions: 0,
+              totalFiles: parsedStatus.totalFiles,
+              isPartial: true,
+              truncated: parsedStatus.truncated,
+              statisticsState: "unknown" as const,
+            },
+            hasUpstream: upstreamRef !== null,
+            aheadCount,
+            behindCount,
+          };
+        }
+
         const moveAwareWorkingTree =
           hasWorkingTreeChanges &&
           untrackedFilesWithoutNumstat.size > 0 &&
@@ -1447,31 +1632,68 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             upstreamRef,
             upstreamBranch,
             hasWorkingTreeChanges,
-            workingTree: moveAwareWorkingTree,
+            workingTree: {
+              ...moveAwareWorkingTree,
+              totalFiles: moveAwareWorkingTree.files.length,
+              isPartial: false,
+              truncated: false,
+              statisticsState: "complete" as const,
+            },
             hasUpstream: upstreamRef !== null,
             aheadCount,
             behindCount,
           };
         }
 
-        const numstatOutputs = yield* Effect.all(
-          [
-            runGitStdout("GitCore.statusDetails.unstagedNumstat", cwd, ["diff", "--numstat"]),
-            runGitStdout("GitCore.statusDetails.stagedNumstat", cwd, [
-              "diff",
-              "--cached",
-              "--numstat",
-            ]),
-          ],
-          { concurrency: "unbounded" },
-        ).pipe(Effect.catchIf(isMissingGitCwdError, () => Effect.succeed(null)));
-        if (numstatOutputs === null) {
-          return NON_REPOSITORY_STATUS_DETAILS;
+        const trackedPaths = parsedStatus.entries
+          .filter((entry) => !entry.isUntracked)
+          .map((entry) => entry.path);
+        const readNumstat = (operation: string, staged: boolean) =>
+          trackedPaths.length === 0
+            ? Effect.succeed("")
+            : executeGit(
+                operation,
+                cwd,
+                ["diff", ...(staged ? ["--cached"] : []), "--numstat", "-z", "--", ...trackedPaths],
+                { maxOutputBytes: STATUS_NUMSTAT_MAX_OUTPUT_BYTES },
+              ).pipe(Effect.map((result) => result.stdout));
+        const numstatResult = yield* Effect.result(
+          Effect.all(
+            [
+              readNumstat("GitCore.statusDetails.unstagedNumstat", false),
+              readNumstat("GitCore.statusDetails.stagedNumstat", true),
+            ],
+            { concurrency: "unbounded" },
+          ),
+        );
+        if (numstatResult._tag === "Failure") {
+          if (isMissingGitCwdError(numstatResult.failure)) {
+            return NON_REPOSITORY_STATUS_DETAILS;
+          }
+          return {
+            ...repoMetadata,
+            branch,
+            upstreamRef,
+            upstreamBranch,
+            hasWorkingTreeChanges,
+            workingTree: {
+              files: boundedFiles,
+              insertions: 0,
+              deletions: 0,
+              totalFiles: parsedStatus.totalFiles,
+              isPartial: true,
+              truncated: false,
+              statisticsState: "unknown" as const,
+            },
+            hasUpstream: upstreamRef !== null,
+            aheadCount,
+            behindCount,
+          };
         }
 
-        const [unstagedNumstatStdout, stagedNumstatStdout] = numstatOutputs;
-        const stagedEntries = parseNumstatEntries(stagedNumstatStdout);
-        const unstagedEntries = parseNumstatEntries(unstagedNumstatStdout);
+        const [unstagedNumstatStdout, stagedNumstatStdout] = numstatResult.success;
+        const stagedEntries = parseNulNumstatEntries(stagedNumstatStdout);
+        const unstagedEntries = parseNulNumstatEntries(unstagedNumstatStdout);
         const workingTree = summarizeNumstatEntries([...stagedEntries, ...unstagedEntries]);
         const files = [...workingTree.files];
         const numstatFilePaths = new Set(files.map((file) => file.path));
@@ -1510,6 +1732,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             files,
             insertions,
             deletions,
+            totalFiles: parsedStatus.totalFiles,
+            isPartial: false,
+            truncated: false,
+            statisticsState: "complete" as const,
           },
           hasUpstream: upstreamRef !== null,
           aheadCount,

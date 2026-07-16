@@ -11,6 +11,7 @@ import {
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
+import { GitHubAccountSelection } from "./github";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -408,6 +409,9 @@ export const OrchestrationProject = Schema.Struct({
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -417,6 +421,7 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 const {
   repositoryIdentity: _projectRepositoryIdentity,
   defaultTargetRef: _projectDefaultTargetRef,
+  githubAccount: _projectGithubAccount,
   ...OrchestrationProjectV1Fields
 } = OrchestrationProject.fields;
 const OrchestrationProjectV1 = Schema.Struct(OrchestrationProjectV1Fields);
@@ -435,6 +440,9 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -443,6 +451,7 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 const {
   repositoryIdentity: _projectShellRepositoryIdentity,
   defaultTargetRef: _projectShellDefaultTargetRef,
+  githubAccount: _projectShellGithubAccount,
   ...OrchestrationProjectShellV1Fields
 } = OrchestrationProjectShell.fields;
 const OrchestrationProjectShellV1 = Schema.Struct(OrchestrationProjectShellV1Fields);
@@ -1007,6 +1016,7 @@ export const ProjectCreateCommand = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
   createdAt: IsoDateTime,
 });
 
@@ -1025,6 +1035,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean),
   repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -1096,6 +1107,7 @@ export const WorktreeWorkspaceMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
   targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   updatedAt: IsoDateTime,
 });
 
@@ -1780,6 +1792,9 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1794,6 +1809,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   isPinned: Schema.optional(Schema.Boolean),
   repositoryIdentity: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultTargetRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)),
   updatedAt: IsoDateTime,
 });
 
@@ -1850,6 +1866,7 @@ export const WorktreeWorkspaceMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   branch: Schema.optional(TrimmedNonEmptyString),
   targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
   mutationRevision: NonNegativeInt,
   updatedAt: IsoDateTime,
 });

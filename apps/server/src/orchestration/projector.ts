@@ -342,6 +342,7 @@ export function projectEvent(
             isPinned: payload.isPinned ?? false,
             repositoryIdentity: payload.repositoryIdentity ?? null,
             defaultTargetRef: payload.defaultTargetRef ?? null,
+            githubAccount: payload.githubAccount ?? null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -381,6 +382,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultTargetRef !== undefined
                     ? { defaultTargetRef: payload.defaultTargetRef }
+                    : {}),
+                  ...(payload.githubAccount !== undefined
+                    ? { githubAccount: payload.githubAccount }
                     : {}),
                   updatedAt: payload.updatedAt,
                 }
@@ -447,22 +451,24 @@ export function projectEvent(
               ...(payload.title !== undefined ? { title: payload.title } : {}),
               ...(nextBranch !== undefined ? { branch: nextBranch } : {}),
               ...(payload.targetRef !== undefined ? { targetRef: payload.targetRef } : {}),
+              ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
               mutationRevision: payload.mutationRevision,
               updatedAt: payload.updatedAt,
             }),
-            threads:
-              nextBranch === undefined
-                ? nextBase.threads
-                : nextBase.threads.map((thread) =>
-                    thread.workspaceId === payload.workspaceId
-                      ? {
-                          ...thread,
-                          branch: nextBranch,
-                          associatedWorktreeBranch: nextBranch,
-                          updatedAt: payload.updatedAt,
-                        }
-                      : thread,
-                  ),
+            threads: nextBase.threads.map((thread) =>
+              thread.workspaceId === payload.workspaceId && thread.deletedAt === null
+                ? {
+                    ...thread,
+                    ...(nextBranch !== undefined
+                      ? { branch: nextBranch, associatedWorktreeBranch: nextBranch }
+                      : {}),
+                    ...(payload.lastKnownPr !== undefined
+                      ? { lastKnownPr: payload.lastKnownPr }
+                      : {}),
+                    updatedAt: payload.updatedAt,
+                  }
+                : thread,
+            ),
           };
         }),
       );

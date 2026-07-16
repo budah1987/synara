@@ -177,9 +177,29 @@ describe("worktree workspace commands", () => {
       }),
     );
     const readModel = await apply(initial, Array.isArray(attached) ? attached : [attached]);
-    const renamed = await Effect.runPromise(
+    const sibling = await Effect.runPromise(
       decideOrchestrationCommand({
         readModel,
+        command: {
+          type: "workspace.conversation.create",
+          commandId: CommandId.makeUnsafe("workspace-pr-sibling"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr"),
+          threadId: ThreadId.makeUnsafe("workspace-pr-thread-2"),
+          title: "Review follow-up",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    const readModelWithSibling = await apply(
+      readModel,
+      Array.isArray(sibling) ? sibling : [sibling],
+    );
+    const renamed = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: readModelWithSibling,
         command: {
           type: "workspace.meta.update",
           commandId: CommandId.makeUnsafe("workspace-rename"),
@@ -187,11 +207,22 @@ describe("worktree workspace commands", () => {
           title: "Shipping details",
           branch: "feature/shipping-details",
           targetRef: "develop",
+          lastKnownPr: {
+            number: 42,
+            title: "Shipping details",
+            url: "https://github.com/example/repo/pull/42",
+            baseBranch: "develop",
+            headBranch: "feature/shipping-details",
+            state: "merged",
+          },
           updatedAt: now,
         },
       }),
     );
-    const finalModel = await apply(readModel, Array.isArray(renamed) ? renamed : [renamed]);
+    const finalModel = await apply(
+      readModelWithSibling,
+      Array.isArray(renamed) ? renamed : [renamed],
+    );
 
     expect(finalModel.workspaces?.[0]).toMatchObject({
       title: "Shipping details",
@@ -199,11 +230,79 @@ describe("worktree workspace commands", () => {
       targetRef: "develop",
       sourceKind: "pull-request",
       mutationRevision: 1,
+      lastKnownPr: { number: 42, state: "merged" },
     });
-    expect(finalModel.threads[0]).toMatchObject({
-      workspaceId: "workspace-pr",
-      branch: "feature/shipping-details",
+    expect(finalModel.threads).toHaveLength(2);
+    for (const thread of finalModel.threads) {
+      expect(thread).toMatchObject({
+        workspaceId: "workspace-pr",
+        branch: "feature/shipping-details",
+        lastKnownPr: { number: 42, state: "merged" },
+      });
+    }
+
+    const unlinked = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: finalModel,
+        command: {
+          type: "workspace.meta.update",
+          commandId: CommandId.makeUnsafe("workspace-unlink-pr"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr"),
+          lastKnownPr: null,
+          updatedAt: now,
+        },
+      }),
+    );
+    const unlinkedModel = await apply(finalModel, Array.isArray(unlinked) ? unlinked : [unlinked]);
+    expect(unlinkedModel.workspaces?.[0]?.lastKnownPr).toBeNull();
+    expect(unlinkedModel.threads.every((thread) => thread.lastKnownPr === null)).toBe(true);
+  });
+
+  it("rejects a second active workspace for the same canonical pull request", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const makeAttach = (suffix: string, url: string) => ({
+      type: "workspace.attach" as const,
+      commandId: CommandId.makeUnsafe(`workspace-attach-${suffix}`),
+      workspaceId: WorktreeWorkspaceId.makeUnsafe(`workspace-${suffix}`),
+      threadId: ThreadId.makeUnsafe(`thread-${suffix}`),
+      projectId: ProjectId.makeUnsafe("workspace-project"),
+      title: `Review ${suffix}`,
+      path: `/tmp/workspace-${suffix}`,
+      branch: `feature/${suffix}`,
+      headRef: null,
+      targetRef: "main",
+      sourceKind: "pull-request" as const,
+      sourceRef: url,
+      lastKnownPr: {
+        number: 42,
+        title: `Review ${suffix}`,
+        url,
+        baseBranch: "main",
+        headBranch: `feature/${suffix}`,
+        state: "open" as const,
+      },
+      modelSelection,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: now,
     });
+    const first = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: makeAttach("first", "https://github.com/Acme/Repo/pull/42"),
+      }),
+    );
+    const readModel = await apply(initial, Array.isArray(first) ? first : [first]);
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: makeAttach("second", "https://github.com/acme/repo/pull/42/"),
+        }),
+      ),
+    ).rejects.toThrow("already attached to workspace 'workspace-first'");
   });
 
   it("rejects a stale provisioning completion generation", async () => {

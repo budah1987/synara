@@ -326,6 +326,7 @@ it.effect("decodes historical project.created payloads with a default provider",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
     assert.strictEqual(parsed.isPinned, false);
+    assert.strictEqual(parsed.githubAccount, null);
   }),
 );
 
@@ -910,6 +911,7 @@ it.effect("keeps V1 shell payloads unchanged while V2 exposes workspace identity
       isPinned: false,
       repositoryIdentity: "repository-1",
       defaultTargetRef: "main",
+      githubAccount: { host: "github.com", login: "octocat" },
       createdAt: now,
       updatedAt: now,
     };
@@ -990,8 +992,10 @@ it.effect("keeps V1 shell payloads unchanged while V2 exposes workspace identity
 
     assert.equal("repositoryIdentity" in v1.projects[0]!, false);
     assert.equal("defaultTargetRef" in v1.projects[0]!, false);
+    assert.equal("githubAccount" in v1.projects[0]!, false);
     assert.equal("workspaceId" in v1.threads[0]!, false);
     assert.equal(v2.projects[0]?.repositoryIdentity, "repository-1");
+    assert.deepEqual(v2.projects[0]?.githubAccount, { host: "github.com", login: "octocat" });
     assert.equal(v2.threads[0]?.workspaceId, "workspace-1");
     assert.equal(v2.workspaces[0]?.id, "workspace-1");
   }),

@@ -97,7 +97,7 @@ import {
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
-import { createThreadSelector } from "~/storeSelectors";
+import { createThreadGitHubAccountSelector, createThreadSelector } from "~/storeSelectors";
 import { useStore } from "~/store";
 
 interface GitActionsControlProps {
@@ -327,6 +327,16 @@ export default function GitActionsControl({
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
+  const githubAccount = useStore(
+    useMemo(() => createThreadGitHubAccountSelector(activeThreadId), [activeThreadId]),
+  );
+  const activeWorkspace = useStore((store) =>
+    activeThread?.workspaceId
+      ? ((store.worktreeWorkspaces ?? []).find(
+          (workspace) => workspace.id === activeThread.workspaceId,
+        ) ?? null)
+      : null,
+  );
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
@@ -357,7 +367,9 @@ export default function GitActionsControl({
     });
   }, [threadToastData]);
 
-  const { data: gitStatus = null, error: gitStatusError } = useQuery(gitStatusQueryOptions(gitCwd));
+  const { data: gitStatus = null, error: gitStatusError } = useQuery(
+    gitStatusQueryOptions(gitCwd, githubAccount),
+  );
 
   const { data: branchList = null } = useQuery(gitBranchesQueryOptions(gitCwd));
   // Default to true while loading so we don't flash init controls.
@@ -379,12 +391,31 @@ export default function GitActionsControl({
     void invalidateGitQueries(queryClient);
   }, [isGitStatusOutOfSync, queryClient]);
 
-  const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatus;
+  const persistedPr = activeWorkspace?.lastKnownPr ?? activeThread?.lastKnownPr ?? null;
+  const persistedStatusPr = persistedPr
+    ? {
+        ...persistedPr,
+        isDraft: persistedPr.isDraft ?? false,
+        mergeability: persistedPr.mergeability ?? ("unknown" as const),
+        additions: persistedPr.additions ?? null,
+        deletions: persistedPr.deletions ?? null,
+        changedFiles: persistedPr.changedFiles ?? null,
+      }
+    : null;
+  const gitStatusWithPersistedPr =
+    gitStatus && gitStatusError && gitStatus.pr === null && persistedStatusPr
+      ? { ...gitStatus, pr: persistedStatusPr }
+      : gitStatus;
+  const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatusWithPersistedPr;
 
   const allFiles = gitStatusForActions?.workingTree.files ?? [];
+  const isPartialStatus = gitStatusForActions?.workingTree.isPartial === true;
+  const hasCompleteStatistics =
+    gitStatusForActions?.workingTree.statisticsState === undefined ||
+    gitStatusForActions.workingTree.statisticsState === "complete";
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
-  const noneSelected = selectedFiles.length === 0;
+  const noneSelected = !isPartialStatus && selectedFiles.length === 0;
 
   const initMutation = useMutation(gitInitMutationOptions({ cwd: gitCwd, queryClient }));
 
@@ -396,6 +427,8 @@ export default function GitActionsControl({
       model: settings.textGenerationModel ?? null,
       modelSelection: gitTextGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
+      ...(githubAccount ? { account: githubAccount } : {}),
+      ...(activeWorkspace?.targetRef ? { baseBranch: activeWorkspace.targetRef } : {}),
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
@@ -420,18 +453,28 @@ export default function GitActionsControl({
       if (!api) {
         return;
       }
-      await api.orchestration.dispatchCommand({
-        type: "thread.meta.update",
-        commandId: newCommandId(),
-        threadId: activeThreadId,
-        lastKnownPr: pr,
-      });
+      if (activeThread?.workspaceId) {
+        await api.orchestration.dispatchCommand({
+          type: "workspace.meta.update",
+          commandId: newCommandId(),
+          workspaceId: activeThread.workspaceId,
+          lastKnownPr: pr,
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        await api.orchestration.dispatchCommand({
+          type: "thread.meta.update",
+          commandId: newCommandId(),
+          threadId: activeThreadId,
+          lastKnownPr: pr,
+        });
+      }
     },
-    [activeThreadId],
+    [activeThread?.workspaceId, activeThreadId],
   );
 
   const isRunStackedActionRunning =
-    useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd) }) > 0;
+    useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd, githubAccount) }) > 0;
   const isPullRunning = useIsMutating({ mutationKey: gitMutationKeys.pull(gitCwd) }) > 0;
   const isGitActionRunning = isRunStackedActionRunning || isPullRunning;
   const isDefaultBranch = useMemo(() => {
@@ -1389,7 +1432,7 @@ export default function GitActionsControl({
                       </span>
                     )}
                   </div>
-                  {allFiles.length > 0 && (
+                  {allFiles.length > 0 && !isPartialStatus && (
                     <Button
                       variant="ghost"
                       size="xs"
@@ -1399,6 +1442,11 @@ export default function GitActionsControl({
                     </Button>
                   )}
                 </div>
+                {isPartialStatus ? (
+                  <p className="text-muted-foreground">
+                    Large change set — showing a partial status. File selection is unavailable.
+                  </p>
+                ) : null}
                 {!gitStatusForActions || allFiles.length === 0 ? (
                   <p className="font-medium">none</p>
                 ) : (
@@ -1456,15 +1504,17 @@ export default function GitActionsControl({
                         })}
                       </div>
                     </ScrollArea>
-                    <div className="flex justify-end font-mono">
-                      <span className="text-success">
-                        +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
-                      </span>
-                      <span className="text-muted-foreground"> / </span>
-                      <span className="text-destructive">
-                        -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
-                      </span>
-                    </div>
+                    {hasCompleteStatistics ? (
+                      <div className="flex justify-end font-mono">
+                        <span className="text-success">
+                          +{selectedFiles.reduce((sum, f) => sum + f.insertions, 0)}
+                        </span>
+                        <span className="text-muted-foreground"> / </span>
+                        <span className="text-destructive">
+                          -{selectedFiles.reduce((sum, f) => sum + f.deletions, 0)}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

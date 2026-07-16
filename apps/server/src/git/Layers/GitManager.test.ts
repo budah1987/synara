@@ -5,7 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
-import type { GitActionProgressEvent } from "@synara/contracts";
+import type { GitActionProgressEvent, GitHubAccountSelection } from "@synara/contracts";
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -15,7 +15,11 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -347,8 +351,14 @@ function handoffThread(
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   textGeneration?: Partial<FakeGitTextGeneration>;
+  wrapGitHubCli?: (service: GitHubCliShape) => GitHubCliShape;
 }) {
-  const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const {
+    service: fakeGitHubCli,
+    ghCalls,
+    accountCalls,
+  } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const gitHubCli = input?.wrapGitHubCli?.(fakeGitHubCli) ?? fakeGitHubCli;
   const textGeneration = createTextGeneration(input?.textGeneration);
   const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "synara-git-manager-test-",
@@ -367,7 +377,7 @@ function makeManager(input?: {
 
   return makeGitManager.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, accountCalls })),
   );
 }
 
@@ -455,6 +465,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-open-pr");
+      expect(status.publication).toEqual({
+        state: "upstream",
+        remoteBranch: "feature/status-open-pr",
+      });
       expect(status.pr).toEqual({
         number: 13,
         title: "Existing PR",
@@ -468,6 +482,78 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         deletions: 36,
         changedFiles: 3,
       });
+    }),
+  );
+
+  it.effect("status reports local-only and stale-upstream branches authoritatively", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/publication-state"]);
+      const { manager } = yield* makeManager();
+
+      const localOnly = yield* manager.status({ cwd: repoDir });
+      expect(localOnly.publication).toEqual({ state: "local_only" });
+
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/publication-state"]);
+      yield* runGit(repoDir, ["push", "origin", "--delete", "feature/publication-state"]);
+
+      const stale = yield* manager.status({ cwd: repoDir });
+      expect(stale.publication).toEqual({
+        state: "stale_upstream",
+        remoteBranch: "feature/publication-state",
+      });
+    }),
+  );
+
+  it.effect("caches GitHub publication lookup per selected account", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/published"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/published"]);
+
+      // Keep Git fetches local while exposing a GitHub-shaped configured URL to the resolver.
+      yield* runGit(repoDir, [
+        "config",
+        `url.${remoteDir}.insteadOf`,
+        "https://github.com/acme/repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "remote.origin.url", "https://github.com/acme/repo.git"]);
+
+      const authoritativeUrl = "https://github.com/acme/repo/tree/feature%2Fpublished";
+      const { manager, ghCalls, accountCalls } = yield* makeManager({
+        ghScenario: {
+          branchBrowserUrls: {
+            "acme/repo#feature/published": authoritativeUrl,
+          },
+        },
+      });
+      const firstAccount = { host: "github.com", login: "octocat" } as const;
+      const secondAccount = { host: "github.com", login: "hubot" } as const;
+
+      const first = yield* manager.status({ cwd: repoDir, account: firstAccount });
+      const cached = yield* manager.status({ cwd: repoDir, account: firstAccount });
+      const second = yield* manager.status({ cwd: repoDir, account: secondAccount });
+
+      expect(first.publication).toEqual({
+        state: "published",
+        remoteBranch: "feature/published",
+        url: authoritativeUrl,
+      });
+      expect(cached.publication).toEqual(first.publication);
+      expect(second.publication).toEqual(first.publication);
+      expect(
+        ghCalls.filter((call) => call.startsWith("api repos/acme/repo/branches/")),
+      ).toHaveLength(2);
+      expect(accountCalls.map((account) => account.login)).toEqual(
+        expect.arrayContaining(["octocat", "hubot"]),
+      );
+      expect(accountCalls.every((account) => account.host === "github.com")).toBe(true);
     }),
   );
 
@@ -514,6 +600,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         const status = yield* manager.status({ cwd: repoDir });
         expect(status.branch).toBe("synara/pr-488/statemachine");
+        // Legacy callers suppress an unverifiable link instead of claiming a stale branch.
+        expect(status.publication).toBeUndefined();
         expect(status.pr).toEqual({
           number: 488,
           title: "Rebase this PR on latest main",
@@ -530,6 +618,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(ghCalls).toContain(
           "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt,author",
         );
+
+        const selectedAccountResult = yield* Effect.result(
+          manager.status({
+            cwd: repoDir,
+            account: { host: "github.com", login: "octocat" },
+          }),
+        );
+        // An explicit account is authoritative, so the same lookup failure is surfaced.
+        expect(selectedAccountResult._tag).toBe("Failure");
       }),
     30_000,
   );
@@ -1687,6 +1784,68 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
       ).toBe(true);
       expect(ghCalls.some((call) => call.startsWith("pr view "))).toBe(false);
+    }),
+  );
+
+  it.effect("uses the selected account and explicit base branch for PR creation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["branch", "release"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature-explicit-base"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      fs.writeFileSync(path.join(repoDir, "changes.txt"), "change\n");
+      yield* runGit(repoDir, ["add", "changes.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature-explicit-base"]);
+      yield* runGit(repoDir, ["config", "branch.feature-explicit-base.gh-merge-base", "main"]);
+
+      const account: GitHubAccountSelection = {
+        host: "github.example.com",
+        login: "octocat",
+      };
+      const lookupAccounts: Array<GitHubAccountSelection | undefined> = [];
+      let createInput:
+        | {
+            readonly account?: GitHubAccountSelection;
+            readonly baseBranch: string;
+          }
+        | undefined;
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: { prListSequence: ["[]", "[]"] },
+        wrapGitHubCli: (service) => ({
+          ...service,
+          listOpenPullRequests: (input) => {
+            lookupAccounts.push(input.account);
+            return service.listOpenPullRequests(input);
+          },
+          createPullRequest: (input) => {
+            createInput = input;
+            return service.createPullRequest(input);
+          },
+        }),
+      });
+
+      const result = yield* manager.runStackedAction({
+        actionId: "explicit-account-and-base",
+        cwd: repoDir,
+        action: "commit_push_pr",
+        account,
+        baseBranch: "release",
+      });
+
+      expect(result.pr).toMatchObject({ status: "created", baseBranch: "release" });
+      expect(lookupAccounts.length).toBeGreaterThan(0);
+      for (const selected of lookupAccounts) {
+        expect(selected).toEqual(account);
+      }
+      expect(createInput).toMatchObject({ account, baseBranch: "release" });
+      expect(
+        ghCalls.some((call) =>
+          call.includes("pr create --base release --head feature-explicit-base"),
+        ),
+      ).toBe(true);
     }),
   );
 

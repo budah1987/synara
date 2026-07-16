@@ -6,6 +6,7 @@ import {
   GitPreparePullRequestThreadInput,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  GitStatusResult,
   GitSummarizeDiffInput,
 } from "./git";
 
@@ -16,6 +17,78 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeSummarizeDiffInput = Schema.decodeUnknownSync(GitSummarizeDiffInput);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+const decodeStatusResult = Schema.decodeUnknownSync(GitStatusResult);
+
+describe("GitStatusResult", () => {
+  it.each([
+    { state: "local_only" },
+    { state: "upstream", remoteBranch: "feature/verified" },
+    {
+      state: "published",
+      remoteBranch: "feature/published",
+      url: "https://github.com/acme/repo/tree/feature/published",
+    },
+    { state: "stale_upstream", remoteBranch: "feature/deleted" },
+  ])("decodes $state publication state", (publication) => {
+    const parsed = decodeStatusResult({
+      branch: "feature/status",
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+      hasUpstream: publication.state !== "local_only",
+      upstreamBranch: publication.state === "local_only" ? null : "feature/status",
+      aheadCount: 0,
+      behindCount: 0,
+      publication,
+      pr: null,
+    });
+
+    expect(parsed.publication).toEqual(publication);
+  });
+
+  it("decodes explicit bounded-detail metadata", () => {
+    const parsed = decodeStatusResult({
+      branch: "feature/large-status",
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: " leading\nbreak.ts ", insertions: 0, deletions: 0 }],
+        insertions: 0,
+        deletions: 0,
+        totalFiles: 4_542,
+        isPartial: true,
+        truncated: true,
+        statisticsState: "unknown",
+      },
+      hasUpstream: true,
+      upstreamBranch: "feature/large-status",
+      aheadCount: 3,
+      behindCount: 1,
+      pr: null,
+    });
+
+    expect(parsed.workingTree).toMatchObject({
+      totalFiles: 4_542,
+      isPartial: true,
+      truncated: true,
+      statisticsState: "unknown",
+    });
+    expect(parsed.workingTree.files[0]?.path).toBe(" leading\nbreak.ts ");
+  });
+
+  it("keeps legacy status payloads decodable", () => {
+    const parsed = decodeStatusResult({
+      branch: "main",
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+      hasUpstream: false,
+      upstreamBranch: null,
+      aheadCount: 0,
+      behindCount: 0,
+      pr: null,
+    });
+
+    expect(parsed.workingTree.isPartial).toBeUndefined();
+  });
+});
 
 describe("GitCreateWorktreeInput", () => {
   it("accepts omitted newBranch for existing-branch worktrees", () => {

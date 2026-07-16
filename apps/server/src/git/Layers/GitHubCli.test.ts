@@ -327,6 +327,90 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("returns an authoritative branch URL using the selected account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "https://github.com/octocat/sample-repo/tree/feature%2Fpublished\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getBranchBrowserUrl({
+          cwd: "/repo",
+          repository: "octocat/sample-repo",
+          branch: "feature/published",
+          account: { host: "github.com", login: "hubot" },
+        });
+      });
+
+      assert.deepStrictEqual(result, {
+        url: "https://github.com/octocat/sample-repo/tree/feature%2Fpublished",
+      });
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "repos/octocat/sample-repo/branches/feature%2Fpublished",
+        "--jq",
+        "._links.html",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_HOST: "github.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
+      );
+    }),
+  );
+
+  it.effect("returns no URL for a missing branch only after repository access succeeds", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockRejectedValueOnce(new Error("gh: Branch not found (HTTP 404)"))
+        .mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            nameWithOwner: "octocat/sample-repo",
+            url: "https://github.com/octocat/sample-repo",
+            sshUrl: "git@github.com:octocat/sample-repo.git",
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getBranchBrowserUrl({
+          cwd: "/repo",
+          repository: "octocat/sample-repo",
+          branch: "feature/deleted",
+        });
+      });
+
+      assert.deepStrictEqual(result, { url: null });
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "repo",
+        "view",
+        "octocat/sample-repo",
+        "--json",
+        "nameWithOwner,url,sshUrl",
+      ]);
+    }),
+  );
+
   it.effect("lists every repository page available to the authenticated account", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

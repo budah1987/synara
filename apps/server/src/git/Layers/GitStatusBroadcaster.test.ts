@@ -1,8 +1,8 @@
-import type { GitStatusResult, GitStatusStreamEvent } from "@synara/contracts";
-import { Deferred, Effect, Layer, Scope, Stream } from "effect";
+import type { GitStatusInput, GitStatusResult, GitStatusStreamEvent } from "@synara/contracts";
+import { Deferred, Effect, Fiber, Layer, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { GitManagerServiceError } from "../Errors";
+import { GitCommandError, type GitManagerServiceError } from "../Errors";
 import { GitCore, type GitCoreShape, type GitStatusDetails } from "../Services/GitCore";
 import { GitManager, type GitManagerShape } from "../Services/GitManager";
 import { GitStatusBroadcaster } from "../Services/GitStatusBroadcaster";
@@ -16,6 +16,11 @@ const baseStatus: GitStatusResult = {
   upstreamBranch: "feature/status-broadcast",
   aheadCount: 0,
   behindCount: 0,
+  publication: {
+    state: "published",
+    remoteBranch: "feature/status-broadcast",
+    url: "https://github.com/acme/repo/tree/feature/status-broadcast",
+  },
   pr: null,
 };
 
@@ -33,12 +38,18 @@ const baseDetails: GitStatusDetails = {
   behindCount: baseStatus.behindCount,
 };
 
-function makeTestLayer(state: {
+interface TestState {
   currentDetails: GitStatusDetails;
   currentStatus: GitStatusResult;
   detailsCalls: number;
   statusCalls: number;
-}) {
+  statusInputs?: GitStatusInput[];
+  statusGate?: Deferred.Deferred<void>;
+  statusStarted?: Deferred.Deferred<void>;
+  statusError?: GitManagerServiceError;
+}
+
+function makeTestLayer(state: TestState) {
   const gitCore = {
     statusDetails: () =>
       Effect.sync(() => {
@@ -47,9 +58,13 @@ function makeTestLayer(state: {
       }),
   } as unknown as GitCoreShape;
   const gitManager: GitManagerShape = {
-    status: () =>
-      Effect.sync(() => {
+    status: (input) =>
+      Effect.gen(function* () {
         state.statusCalls += 1;
+        state.statusInputs?.push(input);
+        if (state.statusStarted) yield* Deferred.succeed(state.statusStarted, undefined);
+        if (state.statusGate) yield* Deferred.await(state.statusGate);
+        if (state.statusError) return yield* state.statusError;
         return state.currentStatus;
       }),
     readWorkingTreeDiff: () => Effect.die("readWorkingTreeDiff should not be called in this test"),
@@ -70,12 +85,7 @@ function makeTestLayer(state: {
 }
 
 const runBroadcasterTest = (
-  state: {
-    currentDetails: GitStatusDetails;
-    currentStatus: GitStatusResult;
-    detailsCalls: number;
-    statusCalls: number;
-  },
+  state: TestState,
   effect: Effect.Effect<void, GitManagerServiceError, GitStatusBroadcaster | Scope.Scope>,
 ) => effect.pipe(Effect.provide(makeTestLayer(state)), Effect.scoped, Effect.runPromise);
 
@@ -84,6 +94,93 @@ afterEach(() => {
 });
 
 describe("GitStatusBroadcasterLive", () => {
+  it("coalesces overlapping status reads for the same account", async () => {
+    const statusGate = await Effect.runPromise(Deferred.make<void>());
+    const statusStarted = await Effect.runPromise(Deferred.make<void>());
+    const state: TestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusGate,
+      statusStarted,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const input = { cwd: "/repo", account: { host: "github.com", login: "octocat" } };
+        const first = yield* broadcaster.getStatus(input).pipe(Effect.forkScoped);
+        yield* Deferred.await(statusStarted);
+        const second = yield* broadcaster.getStatus(input).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+
+        expect(state.statusCalls).toBe(1);
+        yield* Deferred.succeed(statusGate, undefined);
+        expect(yield* Fiber.join(first)).toEqual(baseStatus);
+        expect(yield* Fiber.join(second)).toEqual(baseStatus);
+      }),
+    );
+  });
+
+  it("keeps caches isolated by selected GitHub account", async () => {
+    const state: TestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusInputs: [],
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        yield* broadcaster.getStatus({
+          cwd: "/repo",
+          account: { host: "github.com", login: "octo-one" },
+        });
+        yield* broadcaster.getStatus({
+          cwd: "/repo",
+          account: { host: "github.com", login: "octo-two" },
+        });
+
+        expect(state.statusCalls).toBe(2);
+        expect(state.statusInputs?.map((input) => input.account?.login)).toEqual([
+          "octo-one",
+          "octo-two",
+        ]);
+      }),
+    );
+  });
+
+  it("backs off repeated status failures", async () => {
+    const state: TestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusError: new GitCommandError({
+        operation: "GitCore.statusDetails.status",
+        command: "git status",
+        cwd: "/repo",
+        detail: "status timed out",
+      }),
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        yield* Effect.result(broadcaster.getStatus({ cwd: "/repo" }));
+        yield* Effect.result(broadcaster.getStatus({ cwd: "/repo" }));
+
+        expect(state.statusCalls).toBe(1);
+      }),
+    );
+  });
+
   it("refreshes local git status on repeated reads without repeating PR lookup", async () => {
     const state = {
       currentDetails: baseDetails,
@@ -290,6 +387,7 @@ describe("GitStatusBroadcasterLive", () => {
             upstreamBranch: baseStatus.upstreamBranch,
             aheadCount: baseStatus.aheadCount,
             behindCount: baseStatus.behindCount,
+            publication: baseStatus.publication,
             pr: baseStatus.pr,
           },
         });

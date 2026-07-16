@@ -1,5 +1,6 @@
 import {
   ChatAttachment,
+  GitHubAccountSelection,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -90,6 +91,7 @@ const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
     isPinned: Schema.Number,
+    githubAccount: Schema.NullOr(Schema.fromJsonString(GitHubAccountSelection)),
   }),
 );
 const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
@@ -456,6 +458,7 @@ function toProjectedProject(row: ProjectionProjectDbRow): OrchestrationProject {
     isPinned: row.isPinned > 0,
     repositoryIdentity: row.repositoryIdentity,
     defaultTargetRef: row.defaultTargetRef,
+    githubAccount: row.githubAccount,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
@@ -606,6 +609,9 @@ function toProjectedProjectShell(row: ProjectionProjectDbRow): OrchestrationProj
     defaultModelSelection: row.defaultModelSelection,
     scripts: row.scripts,
     isPinned: row.isPinned > 0,
+    repositoryIdentity: row.repositoryIdentity,
+    defaultTargetRef: row.defaultTargetRef,
+    githubAccount: row.githubAccount,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -756,6 +762,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           is_pinned AS "isPinned",
           repository_identity AS "repositoryIdentity",
           default_target_ref AS "defaultTargetRef",
+          github_account_json AS "githubAccount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1145,6 +1152,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           is_pinned AS "isPinned",
           repository_identity AS "repositoryIdentity",
           default_target_ref AS "defaultTargetRef",
+          github_account_json AS "githubAccount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -1186,6 +1194,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           is_pinned AS "isPinned",
           repository_identity AS "repositoryIdentity",
           default_target_ref AS "defaultTargetRef",
+          github_account_json AS "githubAccount",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
@@ -2099,6 +2108,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ...project,
               repositoryIdentity: row?.repositoryIdentity ?? null,
               defaultTargetRef: row?.defaultTargetRef ?? null,
+              githubAccount: row?.githubAccount ?? null,
             };
           }),
           workspaces: workspaceRows
@@ -2153,23 +2163,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             "ProjectionSnapshotQuery.getActiveProjectByWorkspaceRoot:decodeModelSelection",
           ),
         ),
-        Effect.map((option) =>
-          Option.map(
-            option,
-            (row): OrchestrationProject => ({
-              id: row.projectId,
-              kind: row.kind,
-              title: row.title,
-              workspaceRoot: row.workspaceRoot,
-              defaultModelSelection: row.defaultModelSelection,
-              scripts: row.scripts,
-              isPinned: row.isPinned > 0,
-              createdAt: row.createdAt,
-              updatedAt: row.updatedAt,
-              deletedAt: row.deletedAt,
-            }),
-          ),
-        ),
+        Effect.map((option) => Option.map(option, toProjectedProject)),
       );
 
   const getProjectShellById: ProjectionSnapshotQueryShape["getProjectShellById"] = (projectId) =>

@@ -26,7 +26,7 @@ import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
-  PULL_REQUEST_LIST_JSON_FIELDS,
+  PULL_REQUEST_LIST_JSON_FIELDS as WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
@@ -112,6 +112,10 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
     reason: "other",
     cause: error,
   });
+}
+
+function isGitHubNotFoundError(error: GitHubCliError): boolean {
+  return /(?:\bHTTP\s+404\b|\b404\s+Not Found\b|\bbranch not found\b)/i.test(error.detail);
 }
 
 // GitHub reports MERGEABLE/CONFLICTING/UNKNOWN; UNKNOWN also stands in for the
@@ -1095,7 +1099,12 @@ const makeGitHubCli = Effect.sync(() => {
   // One implementation behind both list methods so the field list, decoding, and
   // normalization cannot drift between the open-only and any-state lookups.
   const listPullRequestsWithState = (
-    input: { readonly cwd: string; readonly headSelector: string; readonly limit?: number },
+    input: {
+      readonly cwd: string;
+      readonly headSelector: string;
+      readonly limit?: number;
+      readonly account?: GitHubAccountSelection;
+    },
     options: {
       readonly state: "open" | "all";
       readonly defaultLimit: number;
@@ -1116,14 +1125,69 @@ const makeGitHubCli = Effect.sync(() => {
         "--json",
         PULL_REQUEST_SUMMARY_JSON_FIELDS,
       ],
+      ...(input.account ? { account: input.account } : {}),
     }).pipe(
       Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
+    );
+
+  const getRepositoryCloneUrls: GitHubCliShape["getRepositoryCloneUrls"] = (input) =>
+    validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
+      Effect.flatMap((repository) =>
+        execute({
+          cwd: input.cwd,
+          args: ["repo", "view", repository, "--json", "nameWithOwner,url,sshUrl"],
+          ...(input.account ? { account: input.account } : {}),
+        }),
+      ),
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((raw) =>
+        decodeGitHubJson(
+          raw,
+          RawGitHubRepositoryCloneUrlsSchema,
+          "getRepositoryCloneUrls",
+          "GitHub CLI returned invalid repository JSON.",
+        ),
+      ),
+      Effect.map(normalizeRepositoryCloneUrls),
+    );
+
+  const getBranchBrowserUrl: GitHubCliShape["getBranchBrowserUrl"] = (input) =>
+    validateRepository(input.repository, "getBranchBrowserUrl").pipe(
+      Effect.flatMap((repository) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            `repos/${repository}/branches/${encodeURIComponent(input.branch)}`,
+            "--jq",
+            "._links.html",
+          ],
+          ...(input.account ? { account: input.account } : {}),
+        }),
+      ),
+      Effect.map((result) => result.stdout.trim()),
+      Effect.flatMap((url) =>
+        url.length > 0
+          ? Effect.succeed({ url })
+          : Effect.fail(
+              new GitHubCliError({
+                operation: "getBranchBrowserUrl",
+                detail: "GitHub returned an empty browser URL for an existing branch.",
+              }),
+            ),
+      ),
+      Effect.catchIf(isGitHubNotFoundError, () =>
+        // GitHub deliberately uses 404 for both a missing branch and an inaccessible
+        // repository. Confirm repository access before classifying the upstream as stale.
+        getRepositoryCloneUrls(input).pipe(Effect.as({ url: null })),
+      ),
     );
 
   const listWorkspacePullRequests = (input: {
     readonly cwd: string;
     readonly filter: GitPullRequestListFilter;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => {
     const state =
       input.filter === "reviewing"
@@ -1149,8 +1213,9 @@ const makeGitHubCli = Effect.sync(() => {
         "--limit",
         String(input.limit ?? WORKSPACE_PULL_REQUEST_LIMIT),
         "--json",
-        PULL_REQUEST_LIST_JSON_FIELDS,
+        WORKSPACE_PULL_REQUEST_LIST_JSON_FIELDS,
       ],
+      ...(input.account ? { account: input.account } : {}),
     }).pipe(
       Effect.flatMap((result) =>
         decodePullRequestListJson(result.stdout, "listWorkspacePullRequests"),
@@ -1472,6 +1537,7 @@ const makeGitHubCli = Effect.sync(() => {
       execute({
         cwd: input.cwd,
         args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -1494,6 +1560,7 @@ const makeGitHubCli = Effect.sync(() => {
           "--json",
           `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
         ],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -1536,9 +1603,11 @@ const makeGitHubCli = Effect.sync(() => {
             ...(after ? ["-F", `after=${after}`] : []),
           ];
 
-          const raw = yield* execute({ cwd: input.cwd, args }).pipe(
-            Effect.map((result) => result.stdout.trim()),
-          );
+          const raw = yield* execute({
+            cwd: input.cwd,
+            args,
+            ...(input.account ? { account: input.account } : {}),
+          }).pipe(Effect.map((result) => result.stdout.trim()));
           const decoded = yield* decodeGitHubJson(
             raw,
             RawReviewThreadsResponseSchema,
@@ -1578,34 +1647,8 @@ const makeGitHubCli = Effect.sync(() => {
 
         return { comments, truncated };
       }),
-    getRepositoryCloneUrls: (input) =>
-      validateRepository(input.repository, "getRepositoryCloneUrls").pipe(
-        Effect.flatMap((repository) =>
-          execute({
-            cwd: input.cwd,
-            args: [
-              "repo",
-              "view",
-              // Preserve gh's current-host selection for existing fork/Enterprise flows.
-              // The pull-request browser methods above intentionally pin github.com.
-              repository,
-              "--json",
-              "nameWithOwner,url,sshUrl",
-            ],
-            ...(input.account ? { account: input.account } : {}),
-          }),
-        ),
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          decodeGitHubJson(
-            raw,
-            RawGitHubRepositoryCloneUrlsSchema,
-            "getRepositoryCloneUrls",
-            "GitHub CLI returned invalid repository JSON.",
-          ),
-        ),
-        Effect.map(normalizeRepositoryCloneUrls),
-      ),
+    getRepositoryCloneUrls,
+    getBranchBrowserUrl,
     listRepositories: (input) =>
       execute({
         cwd: input.cwd,
@@ -1638,11 +1681,13 @@ const makeGitHubCli = Effect.sync(() => {
           "--body-file",
           input.bodyFile,
         ],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(Effect.asVoid),
     getDefaultBranch: (input) =>
       execute({
         cwd: input.cwd,
         args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.map((value) => {
           const trimmed = value.stdout.trim();
@@ -1653,6 +1698,7 @@ const makeGitHubCli = Effect.sync(() => {
       execute({
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(Effect.asVoid),
   } satisfies GitHubCliShape;
 

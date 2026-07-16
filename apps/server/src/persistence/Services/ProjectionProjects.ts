@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  GitHubAccountSelection,
   ProjectId,
   ProjectKind,
   ProjectScript,
@@ -30,6 +31,9 @@ export const ProjectionProject = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   defaultTargetRef: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  githubAccount: Schema.optional(Schema.NullOr(GitHubAccountSelection)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
   createdAt: IsoDateTime,
