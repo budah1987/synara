@@ -240,6 +240,21 @@ describe("PullRequestRow pin control", () => {
     expect(document.activeElement?.getAttribute("data-pull-request-number")).toBe("42");
   });
 
+  it("shows the full head-to-base flow and workspace association", async () => {
+    await render(
+      <PullRequestRow
+        entry={makeEntry(false)}
+        selected={false}
+        workspaceAssociation="archived"
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
+    );
+
+    expect(page.getByText("feature/pin → main")).toBeVisible();
+    expect(page.getByText("Archived workspace")).toBeVisible();
+  });
+
   it("returns focus to the selected row when the focused dock closes", async () => {
     await render(<FocusRestoreHarness />);
 

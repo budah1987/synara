@@ -52,6 +52,7 @@ export function filterWorkspacePullRequests(
       pullRequest.authorLogin,
       pullRequest.headBranch,
       pullRequest.baseBranch,
+      pullRequest.url,
       String(pullRequest.number),
       `#${pullRequest.number}`,
     ]

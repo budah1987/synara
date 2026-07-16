@@ -8,6 +8,7 @@
 //          involvement/search filters, identity, and badge helpers
 
 import type {
+  OrchestrationWorktreeWorkspace,
   PullRequestInvolvement,
   PullRequestListEntry,
   PullRequestSetPinnedInput,
@@ -16,6 +17,7 @@ import {
   pullRequestListProjectContexts,
   pullRequestListRepositoryIdentity,
 } from "@synara/shared/githubRepository";
+import { findWorkspaceForPullRequest } from "@synara/shared/pullRequest";
 
 export type PullRequestListGroupKey = "pinned" | "reviewRequested" | "authored" | "others";
 
@@ -25,10 +27,12 @@ export interface PullRequestListGroup {
   entries: PullRequestListEntry[];
 }
 
+export type PullRequestWorkspaceAssociation = "active" | "archived" | null;
+
 const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   pinned: "Pinned",
   reviewRequested: "Review requested",
-  authored: "Authored",
+  authored: "My PRs",
   others: "Others",
 };
 
@@ -62,8 +66,8 @@ export function pullRequestPinToggleInputs(
     }));
 }
 
-// The list is fetched once per state as the "all" involvement superset; the Reviewing and
-// Authored tabs are views over it, so switching tabs never waits on the network. Reviewing
+// The list is fetched once per state as the "all" involvement superset; Review requested and
+// My PRs are views over it, so switching tabs never waits on the network. Review requested
 // relies on the server-computed viewerReviewRequested flag (which includes team-routed review
 // requests); Authored prefers the server's account-scoped flag, then falls back to the aggregate
 // viewer login when talking to an older server that does not emit the field.
@@ -92,15 +96,24 @@ export function filterPullRequestEntriesByInvolvement(
   return [...entries];
 }
 
-/** Free-text list filter: matches title, repository, head branch, "#123"/"123", and author. */
+/** Free-text list filter over every identity users can see or paste from GitHub. */
 export function matchesPullRequestSearchQuery(
   entry: PullRequestListEntry,
   normalizedQuery: string,
 ): boolean {
   if (normalizedQuery.length === 0) return true;
-  return `${entry.title} ${entry.repository} ${entry.headBranch} #${entry.number} ${entry.author?.login ?? ""}`
+  return `${entry.title} ${entry.repository} ${entry.headBranch} ${entry.baseBranch} ${entry.url} #${entry.number} ${entry.author?.login ?? ""}`
     .toLowerCase()
     .includes(normalizedQuery);
+}
+
+export function pullRequestWorkspaceAssociation(
+  entry: Pick<PullRequestListEntry, "projectId" | "number" | "url">,
+  workspaces: readonly OrchestrationWorktreeWorkspace[],
+): PullRequestWorkspaceAssociation {
+  const workspace = findWorkspaceForPullRequest(workspaces, entry.projectId, entry);
+  if (!workspace) return null;
+  return workspace.archivedAt === null ? "active" : "archived";
 }
 
 export function countUniqueViewerReviewRequests(entries: readonly PullRequestListEntry[]): number {

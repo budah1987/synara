@@ -23,6 +23,7 @@ import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
+import type { PullRequestWorkspaceAssociation } from "./pullRequestList.logic";
 
 function TruncatedTitle({ title, number }: { title: string; number: number }) {
   return (
@@ -47,6 +48,7 @@ export const PullRequestRow = memo(function PullRequestRow({
   entry,
   selected,
   showProjectTitle = false,
+  workspaceAssociation = null,
   onClick,
   onTogglePinned,
 }: {
@@ -54,6 +56,7 @@ export const PullRequestRow = memo(function PullRequestRow({
   selected: boolean;
   /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
+  workspaceAssociation?: PullRequestWorkspaceAssociation;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
@@ -100,6 +103,11 @@ export const PullRequestRow = memo(function PullRequestRow({
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2">
             <TruncatedTitle title={entry.title} number={entry.number} />
+            {workspaceAssociation ? (
+              <span className="shrink-0 rounded-full bg-foreground/7 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+                {workspaceAssociation === "archived" ? "Archived workspace" : "In Synara"}
+              </span>
+            ) : null}
           </span>
           {/* Fine print, set once on the line: author, repository and branch are one thought at
               one size — the branch used to be the only part stepped down, which made the line
@@ -125,7 +133,7 @@ export const PullRequestRow = memo(function PullRequestRow({
                 className="max-w-[14rem] truncate"
                 title={`${entry.headBranch} → ${entry.baseBranch}`}
               >
-                {entry.headBranch}
+                {entry.headBranch} → {entry.baseBranch}
               </span>
             </PullRequestMetaLine>
           </span>

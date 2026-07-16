@@ -87,10 +87,13 @@ describe("workspace source filtering", () => {
     ]);
   });
 
-  it("searches pull requests by title, author, branch, base, and number", () => {
+  it("searches pull requests by title, author, head/base branch, URL, and number", () => {
     expect(filterWorkspacePullRequests(pullRequests, "octocat")).toEqual([pullRequests[0]]);
     expect(filterWorkspacePullRequests(pullRequests, "cleanup/legacy")).toEqual([pullRequests[1]]);
     expect(filterWorkspacePullRequests(pullRequests, "#42")).toEqual([pullRequests[0]]);
     expect(filterWorkspacePullRequests(pullRequests, "release")).toEqual([pullRequests[1]]);
+    expect(filterWorkspacePullRequests(pullRequests, "github.com/example/repo/pull/77")).toEqual([
+      pullRequests[1],
+    ]);
   });
 });

@@ -9,7 +9,11 @@
 import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
 import { memo } from "react";
 
-import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
+import {
+  pullRequestListEntryKey,
+  type PullRequestListGroup,
+  type PullRequestWorkspaceAssociation,
+} from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
 import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
@@ -21,6 +25,7 @@ export const PullRequestList = memo(function PullRequestList({
   selectedRepo,
   selectedNumber,
   showProjectTitle = false,
+  workspaceAssociationByEntryKey,
   onSelect,
   onTogglePinned,
 }: {
@@ -30,6 +35,7 @@ export const PullRequestList = memo(function PullRequestList({
   selectedRepo: string | undefined;
   selectedNumber: number | undefined;
   showProjectTitle?: boolean;
+  workspaceAssociationByEntryKey?: Readonly<Record<string, PullRequestWorkspaceAssociation>>;
   onSelect: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
 }) {
@@ -43,6 +49,7 @@ export const PullRequestList = memo(function PullRequestList({
         selectedRepo === entry.repository &&
         selectedNumber === entry.number
       }
+      workspaceAssociation={workspaceAssociationByEntryKey?.[pullRequestListEntryKey(entry)] ?? null}
       onClick={onSelect}
       onTogglePinned={onTogglePinned}
     />

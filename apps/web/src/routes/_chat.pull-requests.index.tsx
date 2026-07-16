@@ -1,4 +1,5 @@
 import type {
+  OrchestrationWorktreeWorkspace,
   ProjectId,
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -29,6 +30,12 @@ import {
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
 import { pullRequestPaneTabLabel } from "~/components/pullRequest/pullRequestDetail.logic";
 import {
+  normalizePullRequestInvolvement,
+  normalizePullRequestState,
+  PULL_REQUEST_INVOLVEMENT_TABS,
+  PULL_REQUEST_STATE_TABS,
+} from "~/components/pullRequest/pullRequestBrowser.logic";
+import {
   focusPullRequestRow,
   isFocusInsideRightDock,
 } from "~/components/pullRequest/pullRequestFocus";
@@ -39,6 +46,9 @@ import {
   matchesPullRequestSearchQuery,
   orderPullRequestEntriesPinnedFirst,
   pullRequestPinToggleInputs,
+  pullRequestListEntryKey,
+  pullRequestWorkspaceAssociation,
+  type PullRequestWorkspaceAssociation,
 } from "~/components/pullRequest/pullRequestList.logic";
 import {
   PullRequestFilterPillGroup,
@@ -109,13 +119,13 @@ const CLEARED_SELECTION = {
 // The route hosts a single dock pane; a stable id keeps the dock tab's identity across pull
 // request switches (the detail panel itself remounts via PullRequestDockPane's key).
 const PULL_REQUESTS_ROUTE_PANE_ID = "pull-requests-route:pull-request";
+const EMPTY_WORKTREE_WORKSPACES: readonly OrchestrationWorktreeWorkspace[] = [];
 const PullRequestDockPane = lazy(() => import("~/components/pullRequest/PullRequestDockPane"));
 
 export const Route = createFileRoute("/_chat/pull-requests/")({
   validateSearch: (raw): PullRequestsSearch => ({
-    involvement:
-      raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
-    state: raw.state === "closed" || raw.state === "merged" ? raw.state : "open",
+    involvement: normalizePullRequestInvolvement(raw.involvement),
+    state: normalizePullRequestState(raw.state),
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
       : {}),
@@ -134,26 +144,18 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
   component: PullRequestsRouteView,
 });
 
-const INVOLVEMENT_TABS: ReadonlyArray<{ value: PullRequestInvolvement; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "reviewing", label: "Reviewing" },
-  { value: "authored", label: "Authored" },
-];
-const STATE_TABS: ReadonlyArray<{ value: PullRequestState; label: string }> = [
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
-];
-
 function PullRequestsRouteView() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((store) => store.projects);
+  const worktreeWorkspaces = useStore(
+    (store) => store.worktreeWorkspaces ?? EMPTY_WORKTREE_WORKSPACES,
+  );
   const queryClient = useQueryClient();
   // One fetch per (state, project): the server returns the "all" involvement superset and the
-  // Reviewing/Authored tabs are derived below, so involvement switches never hit the network.
+  // Review requested/My PRs are derived below, so involvement switches never hit the network.
   const listInput = useMemo(
     () => ({ state: search.state, projectId: search.projectId ?? null }),
     [search.projectId, search.state],
@@ -264,6 +266,16 @@ function PullRequestsRouteView() {
         : null,
     [entries, listQuery.data?.viewer, search.involvement],
   );
+  const workspaceAssociationByEntryKey = useMemo<
+    Record<string, PullRequestWorkspaceAssociation>
+  >(() => {
+    const associations: Record<string, PullRequestWorkspaceAssociation> = {};
+    for (const entry of entries) {
+      const association = pullRequestWorkspaceAssociation(entry, worktreeWorkspaces);
+      if (association) associations[pullRequestListEntryKey(entry)] = association;
+    }
+    return associations;
+  }, [entries, worktreeWorkspaces]);
   // A crafted URL must not show Project A's list while opening Project B's PR: when the list
   // is project-scoped, the selection must belong to that same project.
   const selectionMatchesScope =
@@ -428,12 +440,12 @@ function PullRequestsRouteView() {
                 <div className="flex flex-wrap items-center gap-2">
                   <PullRequestFilterPillGroup
                     value={search.involvement}
-                    options={INVOLVEMENT_TABS}
+                    options={PULL_REQUEST_INVOLVEMENT_TABS}
                     onChange={(involvement) => updateSearch({ involvement, ...CLEARED_SELECTION })}
                   />
                   <PullRequestFilterPillGroup
                     value={search.state}
-                    options={STATE_TABS}
+                    options={PULL_REQUEST_STATE_TABS}
                     onIntent={handleStateIntent}
                     onChange={(state) => updateSearch({ state, ...CLEARED_SELECTION })}
                   />
@@ -495,6 +507,7 @@ function PullRequestsRouteView() {
                   selectedRepo={search.selectedRepo}
                   selectedNumber={search.number}
                   showProjectTitle={search.projectId === undefined}
+                  workspaceAssociationByEntryKey={workspaceAssociationByEntryKey}
                   onSelect={handleSelectPullRequest}
                   onTogglePinned={handleTogglePinned}
                 />

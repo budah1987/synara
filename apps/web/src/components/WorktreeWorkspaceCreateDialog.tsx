@@ -3,21 +3,29 @@ import type {
   GitHubAccountSelection,
   GitPullRequestListFilter,
   GitPullRequestListItem,
+  OrchestrationWorktreeWorkspace,
 } from "@synara/contracts";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { readNativeApi } from "../nativeApi";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { cn } from "../lib/utils";
-import {
-  CheckIcon,
-  GitBranchIcon,
-  GitMergedSimpleIcon,
-  GitPullRequestIcon,
-  SearchIcon,
-} from "../lib/icons";
+import { CheckIcon, GitBranchIcon, GitPullRequestIcon, SearchIcon } from "../lib/icons";
 import { parsePullRequestReference } from "../pullRequestReference";
-import { resolvePrStatePresentation } from "./Sidebar.logic";
+import {
+  PULL_REQUEST_PICKER_FILTERS,
+  pullRequestPickerScope,
+} from "./pullRequest/pullRequestBrowser.logic";
+import {
+  filterPullRequestEntriesByInvolvement,
+  pullRequestWorkspaceAssociation,
+  type PullRequestWorkspaceAssociation,
+} from "./pullRequest/pullRequestList.logic";
+import { PullRequestAvatar } from "./pullRequest/PullRequestAvatar";
+import { PullRequestDiffStat } from "./pullRequest/PullRequestDiffStat";
+import { PullRequestFilterPillGroup } from "./pullRequest/PullRequestListFilters";
+import { PullRequestStateGlyph } from "./pullRequest/PullRequestStateGlyph";
 import {
   branchNameFromWorkspaceTitle,
   dedupeWorkspaceBranches,
@@ -38,6 +46,12 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
+import {
+  pullRequestsExactInvolvementQueryOptions,
+  pullRequestsListQueryOptions,
+  shouldLoadExactPullRequestInvolvement,
+} from "../lib/pullRequestReactQuery";
+import { useStore } from "../store";
 
 export type WorkspaceCreateSource =
   | { kind: "new-branch"; branchName: string; targetRef: string }
@@ -60,64 +74,17 @@ const SOURCE_OPTIONS = [
   { kind: "pull-request", label: "Pull request" },
 ] as const;
 
-const PULL_REQUEST_FILTERS: ReadonlyArray<{
-  value: GitPullRequestListFilter;
-  label: string;
-}> = [
-  { value: "all", label: "All" },
-  { value: "reviewing", label: "Reviewing" },
-  { value: "authored", label: "Authored" },
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
-];
-
-function PullRequestAuthorAvatar({ login, url }: { login: string | null; url: string | null }) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => setImageFailed(false), [url]);
-
-  if (url && !imageFailed) {
-    return (
-      <img
-        src={url}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        className="size-4 shrink-0 rounded-full bg-muted object-cover"
-        onError={() => setImageFailed(true)}
-      />
-    );
-  }
-
-  return (
-    <span
-      aria-hidden
-      className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium uppercase text-muted-foreground"
-    >
-      {login?.slice(0, 1) || "?"}
-    </span>
-  );
-}
-
-function PullRequestStateIcon({ pullRequest }: { pullRequest: GitPullRequestListItem }) {
-  const presentation = resolvePrStatePresentation(pullRequest);
-  const Icon = presentation.iconKind === "merged-simple" ? GitMergedSimpleIcon : GitPullRequestIcon;
-  return (
-    <Icon
-      className={cn("mt-0.5 size-4 shrink-0", presentation.colorClass)}
-      aria-label={presentation.label}
-    />
-  );
-}
+const EMPTY_WORKTREE_WORKSPACES: readonly OrchestrationWorktreeWorkspace[] = [];
 
 function PullRequestRow({
   pullRequest,
   selected,
+  workspaceAssociation,
   onSelect,
 }: {
   pullRequest: GitPullRequestListItem;
   selected: boolean;
+  workspaceAssociation: PullRequestWorkspaceAssociation;
   onSelect: () => void;
 }) {
   return (
@@ -133,33 +100,51 @@ function PullRequestRow({
       onClick={onSelect}
     >
       <span className="row-span-2">
-        <PullRequestStateIcon pullRequest={pullRequest} />
+        <PullRequestStateGlyph
+          state={pullRequest.state}
+          isDraft={pullRequest.isDraft}
+          className="mt-0.5"
+        />
       </span>
-      <span className="min-w-0 truncate text-xs font-medium leading-4">{pullRequest.title}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="min-w-0 truncate text-xs font-medium leading-4">
+          {pullRequest.title}
+        </span>
+        {workspaceAssociation ? (
+          <span className="shrink-0 rounded-full bg-foreground/7 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
+            {workspaceAssociation === "archived" ? "Archived workspace" : "In Synara"}
+          </span>
+        ) : null}
+      </span>
       <span className="shrink-0 tabular-nums text-[10px] leading-4 text-muted-foreground">
         {pullRequest.updatedAt ? formatRelativeTime(pullRequest.updatedAt) : null}
       </span>
       <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-        <PullRequestAuthorAvatar
-          login={pullRequest.authorLogin}
-          url={pullRequest.authorAvatarUrl}
+        <PullRequestAvatar
+          actor={
+            pullRequest.authorLogin
+              ? {
+                  login: pullRequest.authorLogin,
+                  name: null,
+                  avatarUrl: pullRequest.authorAvatarUrl,
+                  url: null,
+                }
+              : null
+          }
         />
         <span className="min-w-0 truncate">
           {pullRequest.authorLogin ?? "Unknown author"}
           <span aria-hidden> · </span>
-          {pullRequest.headBranch}
+          {pullRequest.headBranch} → {pullRequest.baseBranch}
         </span>
       </span>
       <span className="flex shrink-0 items-center gap-2 tabular-nums text-[10px]">
-        {pullRequest.additions !== null ? (
-          <span className="text-[var(--color-decoration-added)]">
-            +{pullRequest.additions.toLocaleString()}
-          </span>
-        ) : null}
-        {pullRequest.deletions !== null ? (
-          <span className="text-[var(--color-decoration-deleted)]">
-            −{pullRequest.deletions.toLocaleString()}
-          </span>
+        {pullRequest.additions !== null && pullRequest.deletions !== null ? (
+          <PullRequestDiffStat
+            additions={pullRequest.additions}
+            deletions={pullRequest.deletions}
+            tone="diff"
+          />
         ) : null}
         {selected ? <CheckIcon className="size-3 text-foreground" aria-hidden /> : null}
       </span>
@@ -171,7 +156,6 @@ export function WorktreeWorkspaceCreateDialog({
   open,
   projectName,
   projectCwd,
-  githubAccount,
   defaultTargetRef,
   onOpenChange,
   onCreate,
@@ -180,6 +164,7 @@ export function WorktreeWorkspaceCreateDialog({
   const branchSearchRef = useRef<HTMLInputElement>(null);
   const pullRequestSearchRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("New workspace");
+  const [titleTouched, setTitleTouched] = useState(false);
   const [branchName, setBranchName] = useState(branchNameFromWorkspaceTitle("New workspace"));
   const [branchNameTouched, setBranchNameTouched] = useState(false);
   const [sourceKind, setSourceKind] = useState<WorkspaceCreateSource["kind"]>("new-branch");
@@ -187,20 +172,85 @@ export function WorktreeWorkspaceCreateDialog({
   const [repositoryTargetRef, setRepositoryTargetRef] = useState(defaultTargetRef ?? "HEAD");
   const [branchQuery, setBranchQuery] = useState("");
   const [pullRequestQuery, setPullRequestQuery] = useState("");
-  const [pullRequestFilter, setPullRequestFilter] = useState<GitPullRequestListFilter>("all");
+  const [pullRequestFilter, setPullRequestFilter] =
+    useState<GitPullRequestListFilter>("reviewing");
   const [pullRequestReference, setPullRequestReference] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
-  const [pullRequests, setPullRequests] = useState<GitPullRequestListItem[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
-  const [isLoadingPullRequests, setIsLoadingPullRequests] = useState(false);
   const [branchListError, setBranchListError] = useState<string | null>(null);
-  const [pullRequestListError, setPullRequestListError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const projectId = useStore(
+    (store) => store.projects.find((project) => project.cwd === projectCwd)?.id ?? null,
+  );
+  const worktreeWorkspaces = useStore(
+    (store) => store.worktreeWorkspaces ?? EMPTY_WORKTREE_WORKSPACES,
+  );
+  const pullRequestScope = pullRequestPickerScope(pullRequestFilter);
+  const pullRequestQueryEnabled = open && sourceKind === "pull-request" && projectId !== null;
+  const pullRequestListQuery = useQuery({
+    ...pullRequestsListQueryOptions({ state: pullRequestScope.state, projectId }),
+    enabled: pullRequestQueryEnabled,
+  });
+  const pullRequestSupersetTruncated = (
+    pullRequestListQuery.data?.repositoryBatches ?? []
+  ).some((batch) => batch.truncated);
+  const needsExactPullRequestInvolvement = shouldLoadExactPullRequestInvolvement({
+    ...pullRequestScope,
+    supersetTruncated: pullRequestSupersetTruncated,
+  });
+  const exactPullRequestListQuery = useQuery({
+    ...pullRequestsExactInvolvementQueryOptions({
+      ...pullRequestScope,
+      projectId,
+    }),
+    enabled: pullRequestQueryEnabled && needsExactPullRequestInvolvement,
+  });
+  const activePullRequestList =
+    needsExactPullRequestInvolvement && exactPullRequestListQuery.data
+      ? exactPullRequestListQuery.data
+      : pullRequestListQuery.data;
+  const pullRequests = useMemo<GitPullRequestListItem[]>(
+    () =>
+      filterPullRequestEntriesByInvolvement(
+        activePullRequestList?.entries ?? [],
+        activePullRequestList?.viewer ?? pullRequestListQuery.data?.viewer,
+        pullRequestScope.involvement,
+      ).map((entry) => ({
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+        baseBranch: entry.baseBranch,
+        headBranch: entry.headBranch,
+        state: entry.state,
+        isDraft: entry.isDraft,
+        authorLogin: entry.author?.login ?? null,
+        authorAvatarUrl: entry.author?.avatarUrl ?? null,
+        updatedAt: entry.updatedAt,
+        additions: entry.additions,
+        deletions: entry.deletions,
+      })),
+    [
+      activePullRequestList,
+      pullRequestListQuery.data?.viewer,
+      pullRequestScope.involvement,
+    ],
+  );
+  const isLoadingPullRequests =
+    pullRequestQueryEnabled &&
+    (pullRequestListQuery.isPending ||
+      (needsExactPullRequestInvolvement && exactPullRequestListQuery.isPending));
+  const pullRequestListError =
+    (pullRequestListQuery.isError && pullRequestListQuery.error) ||
+    (needsExactPullRequestInvolvement &&
+      exactPullRequestListQuery.isError &&
+      exactPullRequestListQuery.error) ||
+    (pullRequestQueryEnabled ? null : new Error("This project is not available in the PR hub."));
 
   useEffect(() => {
     if (!open) return;
     setTitle("New workspace");
+    setTitleTouched(false);
     setBranchName(branchNameFromWorkspaceTitle("New workspace"));
     setBranchNameTouched(false);
     setSourceKind("new-branch");
@@ -208,11 +258,9 @@ export function WorktreeWorkspaceCreateDialog({
     setRepositoryTargetRef(defaultTargetRef ?? "HEAD");
     setBranchQuery("");
     setPullRequestQuery("");
-    setPullRequestFilter("all");
+    setPullRequestFilter("reviewing");
     setPullRequestReference("");
-    setPullRequests([]);
     setBranchListError(null);
-    setPullRequestListError(null);
     setError(null);
     setIsCreating(false);
     let cancelled = false;
@@ -248,39 +296,6 @@ export function WorktreeWorkspaceCreateDialog({
       window.cancelAnimationFrame(frame);
     };
   }, [defaultTargetRef, open, projectCwd]);
-
-  useEffect(() => {
-    if (!open || sourceKind !== "pull-request") return;
-    const api = readNativeApi();
-    if (!api) return;
-    let cancelled = false;
-    setPullRequests([]);
-    setPullRequestListError(null);
-    setIsLoadingPullRequests(true);
-    void api.git
-      .listPullRequests({
-        cwd: projectCwd,
-        filter: pullRequestFilter,
-        ...(githubAccount ? { account: githubAccount } : {}),
-      })
-      .then((result) => {
-        if (!cancelled) setPullRequests([...result.pullRequests]);
-      })
-      .catch((cause) => {
-        if (cancelled) return;
-        setPullRequestListError(
-          cause instanceof Error
-            ? cause.message
-            : "Pull requests could not be loaded. Check GitHub CLI and try again.",
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingPullRequests(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [githubAccount, open, projectCwd, pullRequestFilter, sourceKind]);
 
   useEffect(() => {
     if (!open) return;
@@ -377,6 +392,7 @@ export function WorktreeWorkspaceCreateDialog({
               onChange={(event) => {
                 const nextTitle = event.target.value;
                 setTitle(nextTitle);
+                setTitleTouched(true);
                 if (!branchNameTouched) setBranchName(branchNameFromWorkspaceTitle(nextTitle));
               }}
             />
@@ -443,27 +459,16 @@ export function WorktreeWorkspaceCreateDialog({
 
           {sourceKind === "pull-request" ? (
             <div className="grid gap-2.5">
-              <div className="flex gap-1 overflow-x-auto pb-0.5" aria-label="Pull request filters">
-                {PULL_REQUEST_FILTERS.map((filter) => (
-                  <button
-                    key={filter.value}
-                    type="button"
-                    aria-pressed={pullRequestFilter === filter.value}
-                    className={cn(
-                      "shrink-0 rounded-md border px-2 py-1 text-[11px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                      pullRequestFilter === filter.value
-                        ? "border-foreground/15 bg-foreground/8 text-foreground"
-                        : "border-transparent text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                    )}
-                    onClick={() => {
-                      setPullRequestFilter(filter.value);
-                      setPullRequestReference("");
-                      setError(null);
-                    }}
-                  >
-                    {filter.label}
-                  </button>
-                ))}
+              <div className="overflow-x-auto pb-0.5" aria-label="Pull request filters">
+                <PullRequestFilterPillGroup
+                  value={pullRequestFilter}
+                  options={PULL_REQUEST_PICKER_FILTERS}
+                  onChange={(filter) => {
+                    setPullRequestFilter(filter);
+                    setPullRequestReference("");
+                    setError(null);
+                  }}
+                />
               </div>
 
               <label className="grid gap-1.5">
@@ -474,7 +479,7 @@ export function WorktreeWorkspaceCreateDialog({
                     ref={pullRequestSearchRef}
                     type="search"
                     value={pullRequestQuery}
-                    placeholder="Search title, author, branch, or number"
+                    placeholder="Search title, author, branch, URL, or number"
                     className="[&_input]:pl-8"
                     onChange={(event) => {
                       setPullRequestQuery(event.target.value);
@@ -494,12 +499,16 @@ export function WorktreeWorkspaceCreateDialog({
                 ) : pullRequestListError ? (
                   <div className="grid gap-1 px-3 py-8 text-center text-xs leading-relaxed text-muted-foreground">
                     <p>Pull requests could not be loaded.</p>
-                    <p className="text-[11px]">{pullRequestListError}</p>
+                    <p className="text-[11px]">
+                      {pullRequestListError instanceof Error
+                        ? pullRequestListError.message
+                        : "Check GitHub CLI and try again."}
+                    </p>
                   </div>
                 ) : filteredPullRequests.length === 0 && !visibleDirectPullRequestReference ? (
                   <div className="px-3 py-10 text-center text-xs text-muted-foreground">
                     {pullRequests.length === 0
-                      ? `No ${pullRequestFilter === "all" ? "" : `${pullRequestFilter} `}pull requests found.`
+                      ? "No pull requests found for this filter."
                       : "No pull requests match your search."}
                   </div>
                 ) : (
@@ -533,8 +542,24 @@ export function WorktreeWorkspaceCreateDialog({
                         key={pullRequest.url}
                         pullRequest={pullRequest}
                         selected={pullRequestReference === pullRequest.url}
+                        workspaceAssociation={
+                          projectId
+                            ? pullRequestWorkspaceAssociation(
+                                {
+                                  projectId,
+                                  number: pullRequest.number,
+                                  url: pullRequest.url,
+                                },
+                                worktreeWorkspaces,
+                              )
+                            : null
+                        }
                         onSelect={() => {
                           setPullRequestReference(pullRequest.url);
+                          if (!titleTouched) {
+                            setTitle(pullRequest.title);
+                            setBranchName(branchNameFromWorkspaceTitle(pullRequest.title));
+                          }
                           setError(null);
                         }}
                       />
