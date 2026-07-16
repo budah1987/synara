@@ -1,14 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
   ProjectId,
+  ThreadId,
   WorktreeWorkspaceId,
   WorkspaceOperationId,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type OrchestrationReadModel,
 } from "@synara/contracts";
 import { Effect, Layer, Stream } from "effect";
@@ -16,6 +20,8 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
 import { GitCoreLive } from "../../git/Layers/GitCore";
+import { decideOrchestrationCommand } from "../decider";
+import { projectEvent } from "../projector";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
 import { WorktreeWorkspaceReactor } from "../Services/WorktreeWorkspaceReactor";
 import {
@@ -52,6 +58,230 @@ describe("resolveWorkspaceBranchProvisioning", () => {
 });
 
 describe("WorktreeWorkspaceReactor", () => {
+  it("backfills legacy conversations by path without changing their content", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-workspace-backfill-"));
+    try {
+      const repository = join(root, "repository");
+      const existingWorktree = join(root, "existing-worktree");
+      const missingWorktree = join(root, "missing-worktree");
+      const deletedWorktree = join(root, "deleted-worktree");
+      mkdirSync(repository);
+      mkdirSync(existingWorktree);
+      execFileSync("git", ["init", "-b", "actual-main", repository]);
+      execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", repository, "config", "user.name", "Synara Test"]);
+      execFileSync("sh", ["-c", "printf fixture > fixture.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "fixture"]);
+      const repositoryHead = execFileSync("git", ["-C", repository, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+
+      const now = "2026-07-15T00:00:00.000Z";
+      const projectId = ProjectId.makeUnsafe("project-legacy-backfill");
+      const modelSelection = { provider: "codex" as const, model: "gpt-5.5" };
+      const legacyThread = (
+        id: string,
+        title: string,
+        worktreePath: string | null,
+        branch: string,
+        messages: ReadonlyArray<unknown> = [],
+      ) =>
+        ({
+          id: ThreadId.makeUnsafe(id),
+          projectId,
+          workspaceId: null,
+          title,
+          modelSelection,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          envMode: worktreePath ? "worktree" : "local",
+          branch,
+          worktreePath,
+          associatedWorktreePath: worktreePath,
+          associatedWorktreeBranch: branch,
+          associatedWorktreeRef: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          latestTurn: null,
+          handoff: null,
+          messages,
+          session: null,
+          activities: [],
+          proposedPlans: [],
+          checkpoints: [],
+          deletedAt: null,
+        }) as unknown as OrchestrationReadModel["threads"][number];
+      const preservedMessage = {
+        id: "legacy-message",
+        role: "user",
+        text: "Keep this conversation exactly as it is.",
+        streaming: false,
+        source: "native",
+        turnId: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      let readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project",
+            title: "Legacy project",
+            workspaceRoot: repository,
+            defaultModelSelection: modelSelection,
+            scripts: [],
+            isPinned: false,
+            repositoryIdentity: "github.com/example/legacy-project",
+            defaultTargetRef: null,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        workspaces: [],
+        threads: [
+          legacyThread("root-thread-1", "Root conversation", null, "stale-main", [
+            preservedMessage,
+          ]),
+          legacyThread("root-thread-2", "Another root conversation", null, "stale-main"),
+          {
+            ...legacyThread("archived-root-thread", "Archived conversation", null, "stale-main"),
+            archivedAt: now,
+          },
+          legacyThread(
+            "existing-worktree-thread",
+            "Existing worktree conversation",
+            existingWorktree,
+            "feature/existing",
+          ),
+          legacyThread(
+            "missing-worktree-thread",
+            "Missing worktree conversation",
+            missingWorktree,
+            "feature/missing",
+          ),
+          {
+            ...legacyThread(
+              "deleted-worktree-thread",
+              "Deleted conversation",
+              deletedWorktree,
+              "feature/deleted",
+            ),
+            deletedAt: now,
+          },
+        ],
+        updatedAt: now,
+      };
+      const commands: OrchestrationCommand[] = [];
+      let sequence = readModel.snapshotSequence;
+      const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        getReadModel: () => Effect.sync(() => readModel),
+        dispatch: (command) =>
+          Effect.gen(function* () {
+            commands.push(command);
+            const decided = yield* decideOrchestrationCommand({ readModel, command });
+            for (const event of Array.isArray(decided) ? decided : [decided]) {
+              sequence += 1;
+              readModel = yield* projectEvent(readModel, {
+                ...event,
+                eventId: EventId.makeUnsafe(`legacy-backfill-event-${sequence}`),
+                sequence,
+              } as OrchestrationEvent);
+            }
+            return { sequence };
+          }),
+        repairState: () => Effect.sync(() => readModel),
+        refreshCommandReadModel: () => Effect.sync(() => readModel),
+        streamDomainEvents: Stream.empty,
+      });
+      const configLayer = ServerConfig.layerTest(repository, root);
+      const gitLayer = GitCoreLive.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(NodeServices.layer),
+      );
+      const layer = WorktreeWorkspaceReactorLive.pipe(
+        Layer.provideMerge(engineLayer),
+        Layer.provideMerge(gitLayer),
+        Layer.provideMerge(configLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const reactor = yield* WorktreeWorkspaceReactor;
+            yield* reactor.start;
+            const commandCountAfterFirstStart = commands.length;
+            yield* reactor.start;
+            expect(commands).toHaveLength(commandCountAfterFirstStart);
+          }),
+        ).pipe(Effect.provide(layer)),
+      );
+
+      expect(commands.filter((command) => command.type === "workspace.import-legacy")).toHaveLength(
+        3,
+      );
+      expect(commands.filter((command) => command.type === "thread.workspace.assign")).toHaveLength(
+        5,
+      );
+      const workspaceByPath = new Map(
+        (readModel.workspaces ?? []).map((workspace) => [workspace.path, workspace]),
+      );
+      const canonicalRepository = realpathSync(repository);
+      const canonicalExistingWorktree = realpathSync(existingWorktree);
+      expect(workspaceByPath.get(canonicalRepository)).toMatchObject({
+        kind: "repository-root",
+        state: "ready",
+        branch: "actual-main",
+        headRef: repositoryHead,
+      });
+      expect(workspaceByPath.get(canonicalExistingWorktree)).toMatchObject({
+        kind: "external",
+        state: "ready",
+        branch: "feature/existing",
+        targetRef: "actual-main",
+      });
+      expect(workspaceByPath.get(missingWorktree)).toMatchObject({
+        kind: "external",
+        state: "missing",
+        branch: "feature/missing",
+      });
+      expect(workspaceByPath.has(deletedWorktree)).toBe(false);
+
+      const rootThreadOne = readModel.threads.find((thread) => thread.id === "root-thread-1");
+      const rootThreadTwo = readModel.threads.find((thread) => thread.id === "root-thread-2");
+      expect(rootThreadOne?.workspaceId).toBe(workspaceByPath.get(canonicalRepository)?.id);
+      expect(rootThreadTwo?.workspaceId).toBe(rootThreadOne?.workspaceId);
+      expect(rootThreadOne).toMatchObject({
+        id: "root-thread-1",
+        title: "Root conversation",
+        modelSelection,
+        messages: [preservedMessage],
+        archivedAt: null,
+        deletedAt: null,
+      });
+      expect(
+        readModel.threads.find((thread) => thread.id === "archived-root-thread"),
+      ).toMatchObject({
+        workspaceId: rootThreadOne?.workspaceId,
+        archivedAt: now,
+        deletedAt: null,
+      });
+      expect(
+        readModel.threads.find((thread) => thread.id === "deleted-worktree-thread"),
+      ).toMatchObject({
+        workspaceId: null,
+        deletedAt: now,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates one worktree, runs setup, and records a fenced completion", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-workspace-reactor-"));
     try {

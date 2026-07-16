@@ -1042,6 +1042,7 @@ export const WorktreeWorkspaceCreateCommand = Schema.Struct({
   operationId: WorkspaceOperationId,
   title: TrimmedNonEmptyString,
   targetRef: TrimmedNonEmptyString,
+  branch: Schema.optional(TrimmedNonEmptyString),
   sourceKind: Schema.optional(Schema.Literals(["new-branch", "branch"])),
   sourceRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   modelSelection: ModelSelection,

@@ -124,11 +124,6 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenIdentifier("terminalFocus"),
   },
   {
-    shortcut: modShortcut("t"),
-    command: "terminal.new",
-    whenAst: whenIdentifier("terminalFocus"),
-  },
-  {
     shortcut: modShortcut("w"),
     command: "terminal.close",
     whenAst: whenIdentifier("terminalFocus"),
@@ -205,6 +200,11 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("n"),
     command: "chat.new",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("t"),
+    command: "chat.newConversation",
     whenAst: whenCreationAllowed,
   },
   {
@@ -374,7 +374,7 @@ describe("isTerminalToggleShortcut", () => {
 });
 
 describe("split/new/close terminal shortcuts", () => {
-  it("requires terminalFocus for default split/new/close bindings", () => {
+  it("requires terminalFocus for default split/close bindings", () => {
     assert.isFalse(
       isTerminalSplitShortcut(event({ key: "d", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -395,14 +395,14 @@ describe("split/new/close terminal shortcuts", () => {
     );
   });
 
-  it("matches split/new when terminalFocus is true", () => {
+  it("matches split/close when terminalFocus is true without assigning terminal.new", () => {
     assert.isTrue(
       isTerminalSplitShortcut(event({ key: "d", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
     );
-    assert.isTrue(
+    assert.isFalse(
       isTerminalNewShortcut(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, {
         platform: "Linux",
         context: { terminalFocus: true },
@@ -814,7 +814,11 @@ describe("shortcutLabelForCommand", () => {
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newChat", "MacIntel"),
       "⌥⌘N",
     );
-    assert.strictEqual(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"), "⌘T");
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newConversation", "MacIntel"),
+      "⌘T",
+    );
+    assert.isNull(shortcutLabelForCommand(DEFAULT_BINDINGS, "terminal.new", "MacIntel"));
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "chat.newTerminal", "MacIntel"),
       "⇧⌘T",
@@ -961,7 +965,14 @@ describe("chat/editor shortcuts", () => {
     );
   });
 
-  it("resolves chat.newTerminal shortcut", () => {
+  it("resolves conversation and terminal creation shortcuts", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.newConversation",
+    );
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "t", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -1035,6 +1046,14 @@ describe("chat/editor shortcuts", () => {
     // macOS: Cmd-chords never reach the shell, so creating a new surface still works.
     assert.strictEqual(
       resolveShortcutCommand(
+        event({ key: "t", metaKey: true }),
+        DEFAULT_BINDINGS,
+        macTerminal,
+      ),
+      "chat.newConversation",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
         event({ key: "t", metaKey: true, shiftKey: true }),
         DEFAULT_BINDINGS,
         macTerminal,
@@ -1067,6 +1086,13 @@ describe("chat/editor shortcuts", () => {
     );
 
     // Linux/Windows: the same chords are real shell input, so terminal focus blocks them.
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ key: "t", ctrlKey: true }),
+        DEFAULT_BINDINGS,
+        linuxTerminal,
+      ),
+    );
     assert.isNull(
       resolveShortcutCommand(
         event({ key: "t", ctrlKey: true, shiftKey: true }),

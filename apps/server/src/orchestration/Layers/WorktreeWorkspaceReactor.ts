@@ -95,13 +95,42 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
   const canonicalPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.catch(() => Effect.succeed(path.resolve(value))));
 
+  const readLegacyGitValue = (cwd: string, operation: string, args: readonly string[]) =>
+    git
+      .execute({ operation, cwd, args, allowNonZeroExit: true })
+      .pipe(
+        Effect.map((result) => (result.code === 0 ? result.stdout.trim() || null : null)),
+        Effect.catch(() => Effect.succeed(null)),
+      );
+
+  const resolveLegacyProjectTargetRef = Effect.fn(function* (projectPath: string) {
+    const remoteHead = yield* readLegacyGitValue(
+      projectPath,
+      "WorktreeWorkspaceReactor.readLegacyRemoteHead",
+      ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    );
+    if (remoteHead) {
+      return remoteHead.startsWith("origin/") ? remoteHead.slice("origin/".length) : remoteHead;
+    }
+    return yield* readLegacyGitValue(
+      projectPath,
+      "WorktreeWorkspaceReactor.readLegacyProjectBranch",
+      ["branch", "--show-current"],
+    );
+  });
+
   const backfillLegacyWorkspaces = Effect.gen(function* () {
     const initial = yield* orchestrationEngine.getReadModel();
     for (const project of initial.projects) {
       if ((project.kind ?? "project") !== "project") continue;
       const projectPath = yield* canonicalPath(project.workspaceRoot);
+      const projectTargetRef =
+        project.defaultTargetRef ?? (yield* resolveLegacyProjectTargetRef(projectPath));
       const candidates = initial.threads.filter(
-        (thread) => thread.projectId === project.id && thread.workspaceId == null,
+        (thread) =>
+          thread.projectId === project.id &&
+          thread.workspaceId == null &&
+          thread.deletedAt === null,
       );
       const groups = new Map<string, typeof candidates>();
       for (const thread of candidates) {
@@ -122,8 +151,22 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           const first = threads[0];
           if (!first) continue;
           const workspaceId = legacyWorkspaceId(project.id, resolvedPath);
-          const branch = first.branch ?? first.associatedWorktreeBranch ?? null;
-          const headRef = first.associatedWorktreeRef ?? null;
+          const workspacePathExists = yield* fileSystem.exists(resolvedPath);
+          const currentBranch = workspacePathExists
+            ? yield* readLegacyGitValue(
+                resolvedPath,
+                "WorktreeWorkspaceReactor.readLegacyBranch",
+                ["branch", "--show-current"],
+              )
+            : null;
+          const currentHead = workspacePathExists
+            ? yield* readLegacyGitValue(resolvedPath, "WorktreeWorkspaceReactor.readLegacyHead", [
+                "rev-parse",
+                "HEAD",
+              ])
+            : null;
+          const branch = currentBranch ?? first.branch ?? first.associatedWorktreeBranch ?? null;
+          const headRef = currentHead ?? first.associatedWorktreeRef ?? null;
           const createdAt =
             threads.map((thread) => thread.createdAt).toSorted()[0] ?? new Date().toISOString();
           yield* orchestrationEngine.dispatch({
@@ -133,12 +176,12 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
             projectId: project.id,
             repositoryIdentity: project.repositoryIdentity ?? project.workspaceRoot,
             kind: resolvedPath === projectPath ? "repository-root" : "external",
-            state: "ready",
+            state: workspacePathExists ? "ready" : "missing",
             title: branch ?? path.basename(resolvedPath),
             path: resolvedPath,
             branch,
             headRef,
-            targetRef: project.defaultTargetRef ?? branch ?? "HEAD",
+            targetRef: projectTargetRef ?? branch ?? "HEAD",
             targetResolvedCommit: headRef,
             createdFromCommit: headRef,
             setupStatus: "skipped",
@@ -189,7 +232,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
 
     const operation = workspace.activeOperation;
     const worktreePath = path.join(config.worktreesDir, String(project.id), String(workspace.id));
-    const generatedBranch = workspaceBranchName(workspace);
+    const generatedBranch = workspace.branch ?? workspaceBranchName(workspace);
     let stage = "resolve-target";
     let createdPath: string | null = null;
     let createdBranch: string | null = null;

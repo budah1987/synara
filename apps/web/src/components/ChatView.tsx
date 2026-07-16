@@ -4286,22 +4286,6 @@ export default function ChatView({
     storeOpenNewFullWidthTerminal(activeThreadId, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
   }, [activeProject, activeThreadId, storeOpenNewFullWidthTerminal]);
-  // Desktop accelerators like Cmd+T can be claimed by Electron before the page sees keydown.
-  useEffect(() => {
-    const onMenuAction = window.desktopBridge?.onMenuAction;
-    if (typeof onMenuAction !== "function" || !isFocusedPane) {
-      return;
-    }
-
-    const unsubscribe = onMenuAction((action) => {
-      if (action !== "new-terminal-tab") return;
-      createTerminalFromShortcut();
-    });
-
-    return () => {
-      unsubscribe?.();
-    };
-  }, [createTerminalFromShortcut, isFocusedPane]);
   const activateTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadId) return;
@@ -10152,6 +10136,51 @@ export default function ChatView({
       });
     }
   }, [activeThread, onNavigateToThread, syncServerWorkspaceShellSnapshot]);
+  useEffect(() => {
+    if (!activeThread?.workspaceId || !isFocusedPane) return;
+
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: Boolean(terminalState.terminalOpen),
+          terminalWorkspaceOpen,
+        },
+      });
+      if (command !== "chat.newConversation") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void onNewWorkspaceChat();
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    activeThread?.workspaceId,
+    isFocusedPane,
+    keybindings,
+    onNewWorkspaceChat,
+    terminalState.terminalOpen,
+    terminalWorkspaceOpen,
+  ]);
+  // Electron claims Cmd/Ctrl+T before the webview receives a keydown event.
+  useEffect(() => {
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function" || !activeThread?.workspaceId || !isFocusedPane) {
+      return;
+    }
+
+    const unsubscribe = onMenuAction((action) => {
+      if (action !== "new-conversation-tab") return;
+      void onNewWorkspaceChat();
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, [activeThread?.workspaceId, isFocusedPane, onNewWorkspaceChat]);
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);

@@ -75,8 +75,6 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+arrowleft", command: "terminal.splitLeft", when: "terminalFocus" },
   { key: "mod+shift+arrowdown", command: "terminal.splitDown", when: "terminalFocus" },
   { key: "mod+shift+arrowup", command: "terminal.splitUp", when: "terminalFocus" },
-  // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
-  { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
@@ -101,6 +99,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // from the terminal). The `|| isMac` escape hatch fires them on macOS regardless of
   // focus, while Linux/Windows keep `!terminalFocus` so Ctrl-chords still reach the shell.
   { key: "mod+n", command: "chat.new", when: "!terminalFocus || isMac" },
+  { key: "mod+t", command: "chat.newConversation", when: "!terminalFocus || isMac" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus || isMac" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus || isMac" },
   { key: "mod+shift+t", command: "chat.newTerminal", when: "!terminalFocus || isMac" },
@@ -602,6 +601,7 @@ const OUTDATED_CREATION_TERMINAL_GUARD = "!terminalFocus";
 const RELAXED_CREATION_TERMINAL_GUARD = "!terminalFocus || isMac";
 const CREATION_COMMANDS_WITH_TERMINAL_ESCAPE = new Set<KeybindingRule["command"]>([
   "chat.new",
+  "chat.newConversation",
   "chat.newLatestProject",
   "chat.newChat",
   "chat.newLocal",
@@ -693,6 +693,23 @@ function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
   readonly rule: KeybindingRule;
   readonly migrated: boolean;
 } {
+  if (
+    isSameKeybindingRule(rule, {
+      key: "mod+t",
+      command: "terminal.new",
+      when: "terminalFocus",
+    })
+  ) {
+    return {
+      rule: {
+        key: "mod+t",
+        command: "chat.newConversation",
+        when: RELAXED_CREATION_TERMINAL_GUARD,
+      },
+      migrated: true,
+    };
+  }
+
   const recentViewShortcut = RECENT_VIEW_SHORTCUT_BY_COMMAND[rule.command];
   if (
     recentViewShortcut === undefined ||

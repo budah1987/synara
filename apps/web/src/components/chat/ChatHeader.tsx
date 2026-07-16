@@ -252,23 +252,6 @@ function EditorChatHistoryMenu(props: {
   const { settings } = useAppSettings();
   const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const displayThreads = useStore(selectDisplayThreads);
-  const conversationStatusByThreadId = useMemo(
-    () =>
-      new Map(
-        displayThreads.map(
-          (thread) =>
-            [
-              thread.id,
-              resolveThreadStatusPill({
-                thread,
-                hasPendingApprovals: thread.hasPendingApprovals,
-                hasPendingUserInput: thread.hasPendingUserInput,
-              }),
-            ] as const,
-        ),
-      ),
-    [displayThreads],
-  );
   const historyThreads = useMemo(
     () =>
       sortThreadsForSidebar(
@@ -375,6 +358,23 @@ function EditorRailTabs(props: {
   const previousActiveTabKeyRef = useRef<string | null>(null);
   const selectDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const displayThreads = useStore(selectDisplayThreads);
+  const conversationStatusByThreadId = useMemo(
+    () =>
+      new Map(
+        displayThreads.map(
+          (thread) =>
+            [
+              thread.id,
+              resolveThreadStatusPill({
+                thread,
+                hasPendingApprovals: thread.hasPendingApprovals,
+                hasPendingUserInput: thread.hasPendingUserInput,
+              }),
+            ] as const,
+        ),
+      ),
+    [displayThreads],
+  );
   const currentChatTab = useMemo<EditorRailChatTab>(
     () => ({
       id: props.activeThreadId,

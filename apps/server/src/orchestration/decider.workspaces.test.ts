@@ -69,6 +69,7 @@ describe("worktree workspace commands", () => {
           operationId: WorkspaceOperationId.makeUnsafe("workspace-operation-1"),
           title: "Feature workspace",
           targetRef: "main",
+          branch: "amir/feature-workspace",
           sourceRef: "main",
           modelSelection,
           runtimeMode: "full-access",
@@ -81,6 +82,11 @@ describe("worktree workspace commands", () => {
     expect(Array.isArray(result)).toBe(true);
     const events = Array.isArray(result) ? result : [result];
     expect(events.map((event) => event.type)).toEqual(["workspace.created", "thread.created"]);
+    expect(events[0]?.payload).toMatchObject({
+      branch: "amir/feature-workspace",
+      sourceRef: "main",
+      targetRef: "main",
+    });
     expect(events[1]?.payload).toMatchObject({
       workspaceId: "workspace-1",
       worktreePath: null,

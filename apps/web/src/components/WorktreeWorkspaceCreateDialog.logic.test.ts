@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GitBranch, GitPullRequestListItem } from "@synara/contracts";
 
 import {
+  branchNameFromWorkspaceTitle,
   dedupeWorkspaceBranches,
   filterWorkspaceBranches,
   filterWorkspacePullRequests,
@@ -64,6 +65,12 @@ const pullRequests: GitPullRequestListItem[] = [
 ];
 
 describe("workspace source filtering", () => {
+  it("derives an editable branch name from the workspace title", () => {
+    expect(branchNameFromWorkspaceTitle("  Review checkout flow  ")).toBe(
+      "synara/review-checkout-flow",
+    );
+  });
+
   it("deduplicates a local branch and its matching remote branch", () => {
     expect(dedupeWorkspaceBranches(branches).map((branch) => branch.name)).toEqual([
       "main",

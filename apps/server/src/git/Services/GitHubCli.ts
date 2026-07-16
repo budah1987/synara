@@ -39,6 +39,10 @@ import type { GitHubCliError } from "../Errors.ts";
 export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
   "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt,author";
 
+/** Lightweight fields for repository-wide PR pickers, where list latency matters. */
+export const PULL_REQUEST_LIST_JSON_FIELDS =
+  "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,additions,deletions,updatedAt,author";
+
 export interface GitHubPullRequestSummary {
   readonly number: number;
   readonly title: string;

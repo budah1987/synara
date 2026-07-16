@@ -25,6 +25,7 @@ import {
   type GitHubPullRequestDetailData,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
+  PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
 
@@ -380,9 +381,9 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             state,
             ...filterArgs,
             "--limit",
-            String(input.limit ?? 1_000),
+            String(input.limit ?? 100),
             "--json",
-            PULL_REQUEST_SUMMARY_JSON_FIELDS,
+            PULL_REQUEST_LIST_JSON_FIELDS,
           ],
         }).pipe(
           Effect.flatMap((result) =>

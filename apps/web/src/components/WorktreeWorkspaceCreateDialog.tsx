@@ -18,12 +18,14 @@ import {
 import { parsePullRequestReference } from "../pullRequestReference";
 import { resolvePrStatePresentation } from "./Sidebar.logic";
 import {
+  branchNameFromWorkspaceTitle,
   dedupeWorkspaceBranches,
   filterWorkspaceBranches,
   filterWorkspacePullRequests,
   readableWorkspaceBranchName,
 } from "./WorktreeWorkspaceCreateDialog.logic";
 import { Button } from "./ui/button";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import {
   Dialog,
   DialogDescription,
@@ -37,7 +39,7 @@ import { Input } from "./ui/input";
 import { Spinner } from "./ui/spinner";
 
 export type WorkspaceCreateSource =
-  | { kind: "new-branch"; targetRef: string }
+  | { kind: "new-branch"; branchName: string; targetRef: string }
   | { kind: "branch"; sourceRef: string; targetRef: string }
   | { kind: "pull-request"; reference: string };
 
@@ -175,6 +177,8 @@ export function WorktreeWorkspaceCreateDialog({
   const branchSearchRef = useRef<HTMLInputElement>(null);
   const pullRequestSearchRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("New workspace");
+  const [branchName, setBranchName] = useState(branchNameFromWorkspaceTitle("New workspace"));
+  const [branchNameTouched, setBranchNameTouched] = useState(false);
   const [sourceKind, setSourceKind] = useState<WorkspaceCreateSource["kind"]>("new-branch");
   const [targetRef, setTargetRef] = useState(defaultTargetRef ?? "HEAD");
   const [repositoryTargetRef, setRepositoryTargetRef] = useState(defaultTargetRef ?? "HEAD");
@@ -194,6 +198,8 @@ export function WorktreeWorkspaceCreateDialog({
   useEffect(() => {
     if (!open) return;
     setTitle("New workspace");
+    setBranchName(branchNameFromWorkspaceTitle("New workspace"));
+    setBranchNameTouched(false);
     setSourceKind("new-branch");
     setTargetRef(defaultTargetRef ?? "HEAD");
     setRepositoryTargetRef(defaultTargetRef ?? "HEAD");
@@ -305,9 +311,11 @@ export function WorktreeWorkspaceCreateDialog({
     title.trim().length > 0 &&
     (sourceKind === "pull-request"
       ? pullRequestReference.trim().length > 0
-      : targetRef.trim().length > 0 &&
-        selectedBranch !== null &&
-        (sourceKind !== "branch" || selectedBranch.worktreePath == null)) &&
+      : sourceKind === "new-branch"
+        ? branchName.trim().length > 0 && repositoryTargetRef.trim().length > 0
+        : targetRef.trim().length > 0 &&
+          selectedBranch !== null &&
+          selectedBranch.worktreePath == null) &&
     !isCreating;
 
   const createWorkspace = async () => {
@@ -324,7 +332,11 @@ export function WorktreeWorkspaceCreateDialog({
                 sourceRef: targetRef.trim(),
                 targetRef: repositoryTargetRef.trim(),
               }
-            : { kind: sourceKind, targetRef: targetRef.trim() };
+            : {
+                kind: sourceKind,
+                branchName: branchName.trim(),
+                targetRef: repositoryTargetRef.trim(),
+              };
       await onCreate({ title: title.trim(), source });
       onOpenChange(false);
     } catch (cause) {
@@ -355,7 +367,11 @@ export function WorktreeWorkspaceCreateDialog({
             <Input
               ref={titleRef}
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                const nextTitle = event.target.value;
+                setTitle(nextTitle);
+                if (!branchNameTouched) setBranchName(branchNameFromWorkspaceTitle(nextTitle));
+              }}
             />
           </label>
 
@@ -379,6 +395,10 @@ export function WorktreeWorkspaceCreateDialog({
                     if (option.kind !== "pull-request") {
                       setPullRequestReference("");
                     }
+                    if (option.kind === "new-branch") {
+                      setTargetRef(repositoryTargetRef);
+                      setBranchQuery("");
+                    }
                     if (option.kind === "branch" && selectedBranch?.worktreePath) {
                       const availableBranch = branchOptions.find(
                         (branch) => branch.worktreePath == null,
@@ -392,6 +412,27 @@ export function WorktreeWorkspaceCreateDialog({
               ))}
             </div>
           </fieldset>
+
+          <DisclosureRegion open={sourceKind === "new-branch"}>
+            <div className="grid gap-2">
+              <label className="grid gap-1.5">
+                <span className="text-xs font-medium text-foreground">Branch name</span>
+                <Input
+                  value={branchName}
+                  placeholder="synara/feature-name"
+                  spellCheck={false}
+                  onChange={(event) => {
+                    setBranchName(event.target.value);
+                    setBranchNameTouched(true);
+                    setError(null);
+                  }}
+                />
+              </label>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Creates this branch from {repositoryTargetRef}.
+              </p>
+            </div>
+          </DisclosureRegion>
 
           {sourceKind === "pull-request" ? (
             <div className="grid gap-2.5">
@@ -502,12 +543,12 @@ export function WorktreeWorkspaceCreateDialog({
                 </p>
               ) : null}
             </div>
-          ) : (
+          ) : null}
+
+          <DisclosureRegion open={sourceKind === "branch"}>
             <div className="grid gap-2">
               <label className="grid gap-1.5" htmlFor="workspace-branch-search">
-                <span className="text-xs font-medium text-foreground">
-                  {sourceKind === "new-branch" ? "Target branch" : "Starting branch"}
-                </span>
+                <span className="text-xs font-medium text-foreground">Starting branch</span>
                 <span className="relative block">
                   <SearchIcon className="pointer-events-none absolute left-3 top-1/2 z-10 size-3.5 -translate-y-1/2 text-muted-foreground" />
                   <Input
@@ -552,7 +593,7 @@ export function WorktreeWorkspaceCreateDialog({
                   <div className="grid gap-0.5">
                     {filteredBranchOptions.map((branch) => {
                       const selected = branch.name === targetRef;
-                      const unavailable = sourceKind === "branch" && branch.worktreePath != null;
+                      const unavailable = branch.worktreePath != null;
                       return (
                         <button
                           key={`${branch.isRemote ? "remote" : "local"}:${branch.name}`}
@@ -588,7 +629,7 @@ export function WorktreeWorkspaceCreateDialog({
                 )}
               </div>
             </div>
-          )}
+          </DisclosureRegion>
 
           {sourceKind === "branch" ? (
             <p className="text-xs leading-relaxed text-muted-foreground">

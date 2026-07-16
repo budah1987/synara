@@ -125,6 +125,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedNewChat.command, "chat.newChat");
 
+    const parsedNewConversation = yield* decode(KeybindingRule, {
+      key: "mod+t",
+      command: "chat.newConversation",
+    });
+    assert.strictEqual(parsedNewConversation.command, "chat.newConversation");
+
     const parsedLatestProject = yield* decode(KeybindingRule, {
       key: "mod+shift+n",
       command: "chat.newLatestProject",

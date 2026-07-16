@@ -1325,9 +1325,9 @@ function configureApplicationMenu(): void {
       label: "View",
       submenu: [
         {
-          label: "New Terminal Tab",
+          label: "New Conversation Tab",
           ...acceleratorProps("CmdOrCtrl+T"),
-          click: () => dispatchMenuAction("new-terminal-tab"),
+          click: () => dispatchMenuAction("new-conversation-tab"),
         },
         { type: "separator" },
         {

@@ -97,6 +97,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenCreationAllowed,
   },
   {
+    command: "chat.newConversation",
+    shortcut: commandShortcut("t"),
+    whenAst: whenCreationAllowed,
+  },
+  {
     command: "chat.newLatestProject",
     shortcut: commandShortcut("n", { shiftKey: true }),
     whenAst: whenCreationAllowed,

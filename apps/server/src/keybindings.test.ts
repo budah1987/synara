@@ -84,6 +84,9 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.strictEqual(defaultShortcutFor("chat.visible.previous"), "mod+[");
       assert.strictEqual(defaultShortcutFor("workspace.visible.next"), "mod+arrowdown");
       assert.strictEqual(defaultShortcutFor("workspace.visible.previous"), "mod+arrowup");
+      assert.strictEqual(defaultShortcutFor("chat.newConversation"), "mod+t");
+      assert.strictEqual(defaultShortcutFor("chat.newTerminal"), "mod+shift+t");
+      assert.isUndefined(defaultShortcutFor("terminal.new"));
     }),
   );
 
@@ -461,6 +464,31 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.isFalse(
         persisted.some(
           (entry) => entry.command === "view.recent.previous" && entry.when === "!terminalFocus",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("migrates the old terminal-tab shortcut to a conversation tab", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(persisted.some((entry) => entry.command === "terminal.new"));
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+t" &&
+            entry.command === "chat.newConversation" &&
+            entry.when === "!terminalFocus || isMac",
         ),
       );
     }).pipe(Effect.provide(makeKeybindingsLayer())),

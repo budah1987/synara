@@ -463,7 +463,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           state: "provisioning",
           title: command.title,
           path: null,
-          branch: null,
+          branch: command.branch ?? null,
           headRef: null,
           targetRef: command.targetRef,
           targetResolvedCommit: null,

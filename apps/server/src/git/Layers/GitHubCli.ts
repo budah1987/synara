@@ -26,6 +26,7 @@ import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
+  PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
@@ -1148,7 +1149,7 @@ const makeGitHubCli = Effect.sync(() => {
         "--limit",
         String(input.limit ?? WORKSPACE_PULL_REQUEST_LIMIT),
         "--json",
-        PULL_REQUEST_SUMMARY_JSON_FIELDS,
+        PULL_REQUEST_LIST_JSON_FIELDS,
       ],
     }).pipe(
       Effect.flatMap((result) =>

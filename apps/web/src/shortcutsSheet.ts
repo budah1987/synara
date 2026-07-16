@@ -66,6 +66,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Start a fresh thread in the current project, or the most recent one.",
   },
   {
+    command: "chat.newConversation",
+    label: "New conversation tab",
+    description: "Add a conversation tab to the current worktree.",
+  },
+  {
     command: "chat.newLatestProject",
     label: "New thread in latest project",
     description: "Jump back into the most recently used project with a new thread.",

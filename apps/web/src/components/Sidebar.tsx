@@ -3054,6 +3054,7 @@ export default function Sidebar() {
           operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
           title: input.title,
           targetRef: input.source.targetRef,
+          branch: input.source.kind === "new-branch" ? input.source.branchName : undefined,
           sourceKind: input.source.kind,
           sourceRef: input.source.kind === "branch" ? input.source.sourceRef : null,
           modelSelection,

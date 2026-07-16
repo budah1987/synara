@@ -7,7 +7,11 @@ vi.mock("../../processRunner", () => ({
 }));
 
 import { runProcess } from "../../processRunner";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  PULL_REQUEST_LIST_JSON_FIELDS,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import { GitHubCliLive } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -253,6 +257,9 @@ layer("GitHubCliLive", (it) => {
       }
       expect(mockedRunProcess.mock.calls[6]?.[1]).toEqual(
         expect.arrayContaining(["--state", "open", "--limit", "25"]),
+      );
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining(["--limit", "100", "--json", PULL_REQUEST_LIST_JSON_FIELDS]),
       );
     }),
   );

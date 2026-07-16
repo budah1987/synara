@@ -33,6 +33,7 @@ const STATIC_KEYBINDING_COMMANDS = [
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",
+  "chat.newConversation",
   "chat.newLatestProject",
   "chat.newChat",
   "chat.newLocal",

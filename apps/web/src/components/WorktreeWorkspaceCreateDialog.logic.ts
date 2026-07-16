@@ -1,5 +1,15 @@
 import type { GitBranch, GitPullRequestListItem } from "@synara/contracts";
 
+export function branchNameFromWorkspaceTitle(title: string): string {
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+  return `synara/${slug || "workspace"}`;
+}
+
 export function readableWorkspaceBranchName(branch: GitBranch): string {
   if (!branch.isRemote || !branch.remoteName) return branch.name;
   return branch.name.replace(new RegExp(`^${branch.remoteName}/`), "");
