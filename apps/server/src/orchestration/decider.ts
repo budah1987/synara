@@ -742,7 +742,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.title === undefined &&
         command.branch === undefined &&
         command.targetRef === undefined &&
-        command.lastKnownPr === undefined
+        command.lastKnownPr === undefined &&
+        command.isPinned === undefined
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -786,6 +787,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.branch !== undefined ? { branch: command.branch } : {}),
           ...(command.targetRef !== undefined ? { targetRef: command.targetRef } : {}),
           ...(command.lastKnownPr !== undefined ? { lastKnownPr: command.lastKnownPr } : {}),
+          ...(command.isPinned !== undefined ? { isPinned: command.isPinned } : {}),
           mutationRevision: workspace.mutationRevision + 1,
           updatedAt: command.updatedAt,
         },

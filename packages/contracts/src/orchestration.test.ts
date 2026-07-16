@@ -491,6 +491,41 @@ it.effect("decodes thread archived and unarchived events", () =>
   }),
 );
 
+it.effect("decodes workspace pin metadata commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "workspace.meta.update",
+      commandId: "cmd-workspace-pin",
+      workspaceId: "workspace-1",
+      isPinned: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "workspace.meta.update");
+    assert.strictEqual(command.isPinned, true);
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-pin",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.meta-updated",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-pin",
+      causationEventId: null,
+      correlationId: "cmd-workspace-pin",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        isPinned: true,
+        mutationRevision: 1,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "workspace.meta-updated");
+    assert.strictEqual(event.payload.isPinned, true);
+  }),
+);
+
 it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadMetaUpdatedPayload({

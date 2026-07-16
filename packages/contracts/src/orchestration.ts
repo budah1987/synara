@@ -1108,6 +1108,7 @@ export const WorktreeWorkspaceMetaUpdateCommand = Schema.Struct({
   branch: Schema.optional(TrimmedNonEmptyString),
   targetRef: Schema.optional(TrimmedNonEmptyString),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  isPinned: Schema.optional(Schema.Boolean),
   updatedAt: IsoDateTime,
 });
 
@@ -1867,6 +1868,7 @@ export const WorktreeWorkspaceMetaUpdatedPayload = Schema.Struct({
   branch: Schema.optional(TrimmedNonEmptyString),
   targetRef: Schema.optional(TrimmedNonEmptyString),
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)),
+  isPinned: Schema.optional(Schema.Boolean),
   mutationRevision: NonNegativeInt,
   updatedAt: IsoDateTime,
 });

@@ -699,6 +699,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.lastKnownPr !== undefined
               ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
+            ...(event.payload.isPinned !== undefined
+              ? { isPinned: event.payload.isPinned }
+              : {}),
             mutationRevision: event.payload.mutationRevision,
             updatedAt: event.payload.updatedAt,
           });

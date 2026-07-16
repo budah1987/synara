@@ -452,6 +452,7 @@ export function projectEvent(
               ...(nextBranch !== undefined ? { branch: nextBranch } : {}),
               ...(payload.targetRef !== undefined ? { targetRef: payload.targetRef } : {}),
               ...(payload.lastKnownPr !== undefined ? { lastKnownPr: payload.lastKnownPr } : {}),
+              ...(payload.isPinned !== undefined ? { isPinned: payload.isPinned } : {}),
               mutationRevision: payload.mutationRevision,
               updatedAt: payload.updatedAt,
             }),

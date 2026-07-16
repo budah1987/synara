@@ -226,6 +226,7 @@ describe("worktree workspace commands", () => {
             headBranch: "feature/shipping-details",
             state: "merged",
           },
+          isPinned: true,
           updatedAt: now,
         },
       }),
@@ -240,6 +241,7 @@ describe("worktree workspace commands", () => {
       branch: "feature/shipping-details",
       targetRef: "develop",
       sourceKind: "pull-request",
+      isPinned: true,
       mutationRevision: 1,
       lastKnownPr: { number: 42, state: "merged" },
     });
