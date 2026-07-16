@@ -366,6 +366,7 @@ import {
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  sortThreadsForConversationTabs,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
@@ -5636,7 +5637,9 @@ export default function Sidebar() {
   const workspaceConversationThreadIds = useMemo(
     () =>
       activeWorkspaceId
-        ? (workspaceThreadsByWorkspaceId.get(activeWorkspaceId) ?? []).map((thread) => thread.id)
+        ? sortThreadsForConversationTabs(
+            workspaceThreadsByWorkspaceId.get(activeWorkspaceId) ?? [],
+          ).map((thread) => thread.id)
         : [],
     [activeWorkspaceId, workspaceThreadsByWorkspaceId],
   );

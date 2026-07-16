@@ -1436,10 +1436,16 @@ describe("resolveConversationTabThreadIds", () => {
   });
 
   it("uses workspace tab order before editor or sidebar order", () => {
-    const workspaceThreadIds = [
-      ThreadId.makeUnsafe("workspace-left"),
-      ThreadId.makeUnsafe("workspace-right"),
-    ];
+    const workspaceThreadIds = sortThreadsForConversationTabs([
+      makeThread({
+        id: ThreadId.makeUnsafe("workspace-right"),
+        createdAt: "2026-07-16T10:05:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("workspace-left"),
+        createdAt: "2026-07-16T10:00:00.000Z",
+      }),
+    ]).map((thread) => thread.id);
 
     expect(
       resolveConversationTabThreadIds({
@@ -1450,6 +1456,10 @@ describe("resolveConversationTabThreadIds", () => {
         visibleSidebarThreadIds: sidebarThreadIds,
       }),
     ).toEqual(workspaceThreadIds);
+    expect(workspaceThreadIds).toEqual([
+      ThreadId.makeUnsafe("workspace-left"),
+      ThreadId.makeUnsafe("workspace-right"),
+    ]);
   });
 });
 
