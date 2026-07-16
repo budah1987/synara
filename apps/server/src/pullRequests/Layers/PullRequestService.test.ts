@@ -173,7 +173,17 @@ describe("PullRequestService", () => {
       listRepositoryPullRequests: ({ account }) =>
         Effect.sync(() => {
           listAccounts.push(account);
-          return makeBatch([]);
+          return makeBatch([
+            {
+              ...makeItem(1),
+              author: {
+                login: account?.login ?? "viewer",
+                name: null,
+                avatarUrl: null,
+                url: null,
+              },
+            },
+          ]);
         }),
       runPullRequestAction: () => Effect.void,
     };
@@ -207,6 +217,8 @@ describe("PullRequestService", () => {
     expect(viewerAccounts).toEqual([accountA, accountB]);
     expect(listAccounts).toEqual([accountA, accountB, accountA]);
     expect(result.viewer).toBeNull();
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries.map((entry) => entry.viewerAuthored)).toEqual([true, true]);
     expect(result.errors).toEqual([]);
   });
 

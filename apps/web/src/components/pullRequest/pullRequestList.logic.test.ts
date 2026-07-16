@@ -124,6 +124,13 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     const groups = groupPullRequestEntriesByInvolvement([entry], null);
     expect(groups[0]?.key).toBe("others");
   });
+
+  it("uses account-scoped authorship when the aggregate viewer is unknown", () => {
+    const authored = makeEntry({ viewerAuthored: true, author: makeActor("alice") });
+    const other = makeEntry({ number: 2, viewerAuthored: false, author: makeActor("bob") });
+    const groups = groupPullRequestEntriesByInvolvement([authored, other], null);
+    expect(groups.map((group) => group.key)).toEqual(["authored", "others"]);
+  });
 });
 
 describe("orderPullRequestEntriesPinnedFirst", () => {
@@ -265,6 +272,35 @@ describe("filterPullRequestEntriesByInvolvement", () => {
   it("returns no authored entries when the viewer login is unknown", () => {
     const entry = makeEntry({ author: makeActor("someone") });
     expect(filterPullRequestEntriesByInvolvement([entry], null, "authored")).toEqual([]);
+  });
+
+  it("filters My PRs by account-scoped authorship when the aggregate viewer is null", () => {
+    const authoredByFirstAccount = makeEntry({ viewerAuthored: true, author: makeActor("alice") });
+    const authoredBySecondAccount = makeEntry({
+      number: 2,
+      viewerAuthored: true,
+      author: makeActor("bob"),
+    });
+    const notAuthored = makeEntry({
+      number: 3,
+      viewerAuthored: false,
+      author: makeActor("alice"),
+    });
+
+    expect(
+      filterPullRequestEntriesByInvolvement(
+        [authoredByFirstAccount, authoredBySecondAccount, notAuthored],
+        null,
+        "authored",
+      ),
+    ).toEqual([authoredByFirstAccount, authoredBySecondAccount]);
+  });
+
+  it("falls back to the aggregate viewer for entries from an older server", () => {
+    const legacyEntry = makeEntry({ author: makeActor("Viewer"), viewerAuthored: undefined });
+    expect(filterPullRequestEntriesByInvolvement([legacyEntry], "viewer", "authored")).toEqual([
+      legacyEntry,
+    ]);
   });
 });
 

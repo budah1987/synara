@@ -117,6 +117,10 @@ export const PullRequestListEntry = Schema.Struct({
   updatedAt: IsoDateTime,
   reviewDecision: Schema.NullOr(Schema.String),
   viewerReviewRequested: Schema.Boolean,
+  // Optional for rolling compatibility with servers that predate account-scoped authorship.
+  // Unlike a decoding default, absence remains observable so the client can use the legacy
+  // aggregate viewer login while the old server is still running.
+  viewerAuthored: Schema.optional(Schema.Boolean),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   // A repository-level row can belong to several local projects/worktrees. The fallback keeps a
   // newer client compatible with a server that still sends one project-local row at a time.

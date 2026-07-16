@@ -27,6 +27,7 @@ import {
 import {
   buildPullRequestListEntry,
   isValidGitHubRepositoryNameWithOwner,
+  isViewerAuthored,
   isViewerReviewRequested,
   orderPullRequestListEntries,
   projectPullRequestIdentityKey,
@@ -488,6 +489,7 @@ export const makePullRequestService = (
                           viewer,
                           involvement === "reviewing" || reviewingNumbers.has(pullRequest.number),
                         ),
+                        viewerAuthored: isViewerAuthored(pullRequest.author, viewer),
                         isPinned: pinnedKeys.has(
                           projectPullRequestIdentityKey({
                             projectId: project.id,
@@ -596,7 +598,15 @@ export const makePullRequestService = (
                 itemCache.invalidate(githubAccountScopedCacheKey(account, key)),
               loadItem: (cwd, repository, number) =>
                 loadPullRequestListItem(cwd, repository, number, account),
-            });
+            }).pipe(
+              Effect.map((result) => ({
+                ...result,
+                entries: result.entries.map((entry) => ({
+                  ...entry,
+                  viewerAuthored: isViewerAuthored(entry.author, viewer),
+                })),
+              })),
+            );
           },
           { concurrency: 4 },
         );

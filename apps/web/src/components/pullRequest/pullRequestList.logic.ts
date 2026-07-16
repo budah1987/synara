@@ -65,7 +65,18 @@ export function pullRequestPinToggleInputs(
 // The list is fetched once per state as the "all" involvement superset; the Reviewing and
 // Authored tabs are views over it, so switching tabs never waits on the network. Reviewing
 // relies on the server-computed viewerReviewRequested flag (which includes team-routed review
-// requests); Authored matches the author login case-insensitively, like the grouping above.
+// requests); Authored prefers the server's account-scoped flag, then falls back to the aggregate
+// viewer login when talking to an older server that does not emit the field.
+function isEntryViewerAuthored(
+  entry: PullRequestListEntry,
+  normalizedViewer: string | null,
+): boolean {
+  if (entry.viewerAuthored !== undefined) return entry.viewerAuthored;
+  return (
+    normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer
+  );
+}
+
 export function filterPullRequestEntriesByInvolvement(
   entries: readonly PullRequestListEntry[],
   viewerLogin: string | null | undefined,
@@ -76,10 +87,7 @@ export function filterPullRequestEntriesByInvolvement(
   }
   if (involvement === "authored") {
     const normalizedViewer = viewerLogin?.trim().toLowerCase() || null;
-    return entries.filter(
-      (entry) =>
-        normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer,
-    );
+    return entries.filter((entry) => isEntryViewerAuthored(entry, normalizedViewer));
   }
   return [...entries];
 }
@@ -131,8 +139,7 @@ export function groupPullRequestEntriesByInvolvement(
       buckets.pinned.push(entry);
       continue;
     }
-    const authorLogin = entry.author?.login.trim().toLowerCase() || null;
-    if (authorLogin && normalizedViewer && authorLogin === normalizedViewer) {
+    if (isEntryViewerAuthored(entry, normalizedViewer)) {
       buckets.authored.push(entry);
     } else if (entry.viewerReviewRequested) {
       buckets.reviewRequested.push(entry);
