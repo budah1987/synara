@@ -90,7 +90,6 @@ import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/l
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   deriveWorkspaceGitPresentationState,
-  findWorkspaceForPullRequest,
   presentPullRequestState,
 } from "@synara/shared/pullRequest";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -106,7 +105,10 @@ import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { readEditorRailActiveChat } from "../editorViewState";
 import { openInPreferredEditor } from "../editorPreferences";
+import { buildReviewPullRequestPrompt } from "./chat/environment/environmentPullRequest.logic";
+import { appendComposerPromptText } from "../lib/chatReferences";
 import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
+import { openPullRequestWorkspace } from "../lib/pullRequestWorkspace";
 import { requestWorkspaceArchive, requestWorkspaceRestore } from "../lib/workspaceLifecycle";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
@@ -3120,44 +3122,29 @@ export default function Sidebar() {
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
       if (input.source.kind === "pull-request") {
-        const prepared = await api.git.preparePullRequestThread({
-          cwd: project.cwd,
-          reference: input.source.reference,
-          mode: "worktree",
-          ...(project.githubAccount ? { account: project.githubAccount } : {}),
-        });
-        if (!prepared.worktreePath) {
-          throw new Error("The pull request did not produce a dedicated worktree.");
-        }
-        const existingWorkspace =
-          findWorkspaceForPullRequest(worktreeWorkspaces, project.id, prepared.pullRequest) ??
-          worktreeWorkspaces.find(
-            (workspace) =>
-              workspace.projectId === project.id && workspace.path === prepared.worktreePath,
-          );
-        if (existingWorkspace) {
-          await handleCreateWorkspaceConversation(existingWorkspace.id, project);
-          return;
-        }
-        await api.orchestration.dispatchCommand({
-          type: "workspace.attach",
-          commandId: newCommandId(),
-          workspaceId,
-          threadId,
-          projectId: project.id,
+        const result = await openPullRequestWorkspace({
+          api,
+          project,
+          defaultProvider: appSettings.defaultProvider,
+          intent: "new-conversation",
           title: input.title,
-          path: prepared.worktreePath,
-          branch: prepared.branch,
-          headRef: null,
-          targetRef: prepared.pullRequest.baseBranch,
-          sourceKind: "pull-request",
-          sourceRef: prepared.pullRequest.url,
-          lastKnownPr: prepared.pullRequest,
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          createdAt,
+          conversationTitle: `Review ${input.title}`,
+          reference: input.source.reference,
+          onSnapshot: syncServerWorkspaceShellSnapshot,
         });
+        appendComposerPromptText(
+          result.threadId,
+          buildReviewPullRequestPrompt({
+            prNumber: result.pullRequest.number,
+            prTitle: result.pullRequest.title,
+            prUrl: result.pullRequest.url,
+            headBranch: result.pullRequest.headBranch,
+            baseBranch: result.pullRequest.baseBranch,
+          }),
+        );
+        setProjectExpanded(project.id, true);
+        await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+        return;
       } else {
         await api.orchestration.dispatchCommand({
           type: "workspace.create",
@@ -3188,11 +3175,9 @@ export default function Sidebar() {
     },
     [
       appSettings.defaultProvider,
-      handleCreateWorkspaceConversation,
       navigate,
       setProjectExpanded,
       syncServerWorkspaceShellSnapshot,
-      worktreeWorkspaces,
     ],
   );
 

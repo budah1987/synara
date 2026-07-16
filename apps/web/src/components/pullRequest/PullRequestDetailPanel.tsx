@@ -8,8 +8,10 @@
 // Exports: PullRequestDetailPanel
 
 import type { PullRequestAction, PullRequestDetailInput } from "@synara/contracts";
+import { findWorkspaceForPullRequest } from "@synara/shared/pullRequest";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import {
@@ -22,6 +24,7 @@ import {
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import {
   buildFixFindingsPrompt,
+  buildReviewPullRequestPrompt,
   buildResolveConflictsPrompt,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import {
@@ -47,6 +50,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
 import { appendComposerPromptText } from "~/lib/chatReferences";
+import { readEditorRailActiveChat } from "~/editorViewState";
 import {
   EllipsisIcon,
   ExternalLinkIcon,
@@ -58,7 +62,10 @@ import {
   LinkIcon,
   XIcon,
 } from "~/lib/icons";
-import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
+import {
+  openPullRequestWorkspace,
+  pullRequestWorkspaceMetadata,
+} from "~/lib/pullRequestWorkspace";
 import {
   pullRequestActionMutationOptions,
   pullRequestDetailQueryOptions,
@@ -66,14 +73,15 @@ import {
 } from "~/lib/pullRequestReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useStore } from "~/store";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 
 type DetailTab = "summary" | "timeline" | "code";
+const EMPTY_WORKSPACES = [] as const;
 
 const ACTION_SUCCESS_LABELS: Record<Exclude<PullRequestAction, "merge">, string> = {
   ready: "Marked ready for review",
@@ -95,7 +103,7 @@ const PR_HEADER_ICON_BUTTON_CLASS_NAME = cn(
   CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
 );
 
-// Filled header action pill (Open on GitHub / Ready for review): shared 28px control height, roomy
+// Filled header action pill (workspace action / Open on GitHub): shared 28px control height, roomy
 // padding, and the label pinned to the ui size on every breakpoint — Button's xs size would
 // drop it to 10px on desktop, which reads shrunken inside a filled pill.
 //
@@ -133,23 +141,33 @@ export function PullRequestDetailPanel({
 }) {
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
-  const { handleNewThread } = useHandleNewThread();
+  const navigate = useNavigate();
+  const projects = useStore((store) => store.projects);
+  const workspaces = useStore((store) => store.worktreeWorkspaces ?? EMPTY_WORKSPACES);
+  const syncServerWorkspaceShellSnapshot = useStore(
+    (store) => store.syncServerWorkspaceShellSnapshot,
+  );
   const [tab, setTab] = useState<DetailTab>(initialTab);
   const [confirmClose, setConfirmClose] = useState(false);
   const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
+  const [workspaceAction, setWorkspaceAction] = useState<"open" | "conversation" | null>(null);
   const actionInFlightRef = useRef(false);
+  const workspaceActionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
-  // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
-  // invalidate exactly like every other prepare-thread flow in the app.
-  const prepareThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({
-      cwd: detail?.workspaceRoot ?? null,
-      queryClient,
-    }),
+  const project = projects.find((candidate) => candidate.id === input.projectId) ?? null;
+  const associatedWorkspace = useMemo(
+    () =>
+      detail
+        ? findWorkspaceForPullRequest(workspaces, detail.projectId, detail)
+        : null,
+    [detail, workspaces],
   );
+  const associatedWorkspaceArchived =
+    associatedWorkspace !== null &&
+    (associatedWorkspace.state === "archived" || associatedWorkspace.archivedAt !== null);
 
   useEffect(() => {
     setTab(initialTab);
@@ -176,9 +194,58 @@ export function PullRequestDetailPanel({
     }
   };
 
-  // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
-  // prepare a worktree on the PR branch, create the thread, and pre-fill the composer with
-  // the task-specific prompt for the user to review and send.
+  const openWorkspace = async (input: {
+    intent: "open" | "new-conversation";
+    prompt?: string;
+    errorTitle: string;
+  }) => {
+    if (!detail || workspaceActionInFlightRef.current) return;
+    workspaceActionInFlightRef.current = true;
+    setWorkspaceAction(input.intent === "open" ? "open" : "conversation");
+    try {
+      if (!project) throw new Error("The project for this pull request is no longer available.");
+      const result = await openPullRequestWorkspace({
+        api: ensureNativeApi(),
+        project,
+        defaultProvider: settings.defaultProvider,
+        intent: input.intent,
+        title: detail.title,
+        conversationTitle: `Review PR #${detail.number}`,
+        pullRequest: pullRequestWorkspaceMetadata(detail),
+        preferredThreadId: associatedWorkspace
+          ? readEditorRailActiveChat(`workspace:${associatedWorkspace.id}`)
+          : null,
+        onSnapshot: syncServerWorkspaceShellSnapshot,
+      });
+      if (input.prompt) appendComposerPromptText(result.threadId, input.prompt);
+      await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: input.errorTitle,
+        description:
+          error instanceof Error ? error.message : "The pull request workspace could not open.",
+      });
+    } finally {
+      workspaceActionInFlightRef.current = false;
+      setWorkspaceAction(null);
+    }
+  };
+
+  const reviewPrompt = detail
+    ? buildReviewPullRequestPrompt({
+        prNumber: detail.number,
+        prTitle: detail.title,
+        prUrl: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        comments: detail.comments,
+        checks: detail.checks,
+        commentsTruncated: detail.commentsTruncated,
+        commentsIncomplete: detail.commentsIncomplete,
+      })
+    : null;
+
   const startPullRequestThread = async (
     kind: "findings" | "conflicts",
     prompt: string,
@@ -187,25 +254,10 @@ export function PullRequestDetailPanel({
     if (!detail || preparingThread !== null) return;
     setPreparingThread(kind);
     try {
-      const mode = settings.defaultThreadEnvMode;
-      const prepared = await prepareThreadMutation.mutateAsync({ reference: detail.url, mode });
-      const threadId = await handleNewThread(detail.projectId, {
-        branch: prepared.branch,
-        worktreePath: prepared.worktreePath,
-        envMode: mode,
-        // This action is an explicit handoff from the PR browser. Reusing the project's
-        // existing draft can leave the user on the PR route and insert the prompt into a
-        // hidden composer, making the button appear inert.
-        fresh: true,
-      });
-      if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
-      appendComposerPromptText(threadId, prompt);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: errorTitle,
-        description:
-          error instanceof Error ? error.message : "The PR thread could not be prepared.",
+      await openWorkspace({
+        intent: "new-conversation",
+        prompt,
+        errorTitle,
       });
     } finally {
       setPreparingThread(null);
@@ -315,6 +367,42 @@ export function PullRequestDetailPanel({
                 {/* Same popup chrome as the composer pickers (model/handoff), with emoji
                     leads for scannability. */}
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
+                  {associatedWorkspace ? (
+                    <>
+                      <MenuItem
+                        disabled={workspaceAction !== null}
+                        onClick={() =>
+                          void openWorkspace({
+                            intent: "open",
+                            errorTitle: associatedWorkspaceArchived
+                              ? "Could not restore workspace"
+                              : "Could not open workspace",
+                          })
+                        }
+                      >
+                        <GitPullRequestIcon className="size-3.5 shrink-0" />
+                        <span>
+                          {associatedWorkspaceArchived ? "Restore workspace" : "Open workspace"}
+                        </span>
+                      </MenuItem>
+                      {!associatedWorkspaceArchived ? (
+                        <MenuItem
+                          disabled={workspaceAction !== null}
+                          onClick={() =>
+                            void openWorkspace({
+                              intent: "new-conversation",
+                              ...(reviewPrompt ? { prompt: reviewPrompt } : {}),
+                              errorTitle: "Could not create review conversation",
+                            })
+                          }
+                        >
+                          <GitPullRequestIcon className="size-3.5 shrink-0" />
+                          <span>New review conversation</span>
+                        </MenuItem>
+                      ) : null}
+                      <MenuSeparator />
+                    </>
+                  ) : null}
                   {detail.state === "open" ? (
                     <>
                       <MenuRadioGroup
@@ -377,18 +465,36 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </ComposerPickerMenuPopup>
               </Menu>
-              {detail.state === "open" && detail.isDraft ? (
-                // A draft's primary action is publishing it for review — merge/conflicts
-                // only become relevant once it leaves draft.
+              {detail.state === "open" ? (
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
-                  disabled={actionPending}
-                  onClick={() => void runAction("ready")}
+                  disabled={workspaceAction !== null}
+                  onClick={() =>
+                    void openWorkspace({
+                      intent: "open",
+                      ...(!associatedWorkspace && reviewPrompt ? { prompt: reviewPrompt } : {}),
+                      errorTitle: associatedWorkspaceArchived
+                        ? "Could not restore workspace"
+                        : associatedWorkspace
+                          ? "Could not open workspace"
+                          : "Could not create review workspace",
+                    })
+                  }
                 >
-                  Ready for review
+                  {workspaceAction === "open"
+                    ? associatedWorkspaceArchived
+                      ? "Restoring…"
+                      : associatedWorkspace
+                        ? "Opening…"
+                        : "Creating…"
+                    : associatedWorkspaceArchived
+                      ? "Restore workspace"
+                      : associatedWorkspace
+                        ? "Open workspace"
+                        : "Review in new workspace"}
                 </Button>
-              ) : detail.state === "open" && !detail.isDraft ? (
+              ) : (
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
@@ -396,7 +502,7 @@ export function PullRequestDetailPanel({
                 >
                   Open on GitHub
                 </Button>
-              ) : null}
+              )}
             </>
           ) : null}
           {onClose ? (

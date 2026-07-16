@@ -10,4 +10,14 @@ describe("pull request detail product policy", () => {
     expect(source).not.toContain('setConfirmAction("merge"');
     expect(source).not.toContain("PullRequestMergeMethod");
   });
+
+  it("routes pull requests through durable workspace actions", () => {
+    expect(source).toContain("Review in new workspace");
+    expect(source).toContain("Open workspace");
+    expect(source).toContain("Restore workspace");
+    expect(source).toContain("New review conversation");
+    expect(source).toContain("openPullRequestWorkspace");
+    expect(source).not.toContain("preparePullRequestThread");
+    expect(source).not.toContain("gitPreparePullRequestThreadMutationOptions");
+  });
 });
