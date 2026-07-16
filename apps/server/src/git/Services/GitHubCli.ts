@@ -153,6 +153,7 @@ export interface GitHubCliShape {
 
   readonly getViewerLogin: (input: {
     readonly cwd: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<string, GitHubCliError>;
 
   readonly listRepositoryPullRequests: (input: {
@@ -162,6 +163,7 @@ export interface GitHubCliShape {
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestListBatch, GitHubCliError>;
 
   /**
@@ -172,6 +174,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestListItem, GitHubCliError>;
 
   /**
@@ -184,23 +187,27 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly viewer: string;
     readonly limit?: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
 
   readonly getPullRequestDetail: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
 
   readonly getRepositoryMergeCapabilities: (input: {
     readonly cwd: string;
     readonly repository: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<PullRequestMergeCapabilities, GitHubCliError>;
 
   readonly getPullRequestDiff: (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<{ readonly patch: string; readonly truncated: boolean }, GitHubCliError>;
 
   readonly runPullRequestAction: (input: {
@@ -209,6 +216,7 @@ export interface GitHubCliShape {
     readonly number: number;
     readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
     readonly mergeMethod?: PullRequestMergeMethod;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**
@@ -219,6 +227,7 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
     readonly body: string;
+    readonly account?: GitHubAccountSelection;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /** List every healthy account stored by GitHub CLI without changing the active account. */

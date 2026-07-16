@@ -53,8 +53,11 @@ layer("WorktreeWorkspaces migration", (it) => {
         )
       `;
 
-      const executed = yield* runMigrations({ toMigrationInclusive: 54 });
-      assert.deepStrictEqual(executed, [[54, "WorktreeWorkspaces"]]);
+      const executed = yield* runMigrations({ toMigrationInclusive: 55 });
+      assert.deepStrictEqual(executed, [
+        [54, "ProjectPullRequestPins"],
+        [55, "WorktreeWorkspaces"],
+      ]);
 
       const [thread] = yield* sql<{
         readonly threadId: string;

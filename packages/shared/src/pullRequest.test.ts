@@ -57,7 +57,7 @@ describe("pull request identity", () => {
     expect(
       findWorkspaceForPullRequest([sourceWorkspace], "project-1", {
         number: 7,
-        url: "https://github.com/acme/repo/pull/7/",
+        url: "https://github.com/ACME/REPO/pull/7/",
       }),
     ).toBe(sourceWorkspace);
   });

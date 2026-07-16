@@ -19,8 +19,8 @@ import {
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
-  canonicalPullRequestIdentity,
-  pullRequestsMatch,
+  pullRequestFromSourceRef,
+  workspaceReferencesPullRequest,
 } from "@synara/shared/pullRequest";
 import {
   collectTailTurnIds,
@@ -54,31 +54,6 @@ const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
 type PullRequestReference = Pick<OrchestrationThreadPullRequest, "number" | "url">;
-
-function pullRequestFromSourceRef(sourceRef: string | null | undefined): PullRequestReference | null {
-  if (!sourceRef) return null;
-  try {
-    const match = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/.*)?$/i.exec(new URL(sourceRef).pathname);
-    const number = Number.parseInt(match?.[1] ?? "", 10);
-    if (!Number.isSafeInteger(number) || number <= 0) return null;
-    const reference = { number, url: sourceRef };
-    return canonicalPullRequestIdentity(reference) ? reference : null;
-  } catch {
-    return null;
-  }
-}
-
-function workspaceReferencesPullRequest(
-  workspace: OrchestrationWorktreeWorkspace,
-  pullRequest: PullRequestReference,
-): boolean {
-  const sourcePullRequest = pullRequestFromSourceRef(workspace.sourceRef);
-  return (
-    (workspace.lastKnownPr !== null &&
-      pullRequestsMatch(workspace.lastKnownPr, pullRequest)) ||
-    (sourcePullRequest !== null && pullRequestsMatch(sourcePullRequest, pullRequest))
-  );
-}
 
 function findActiveWorkspaceForPullRequest(input: {
   readonly readModel: OrchestrationReadModel;
@@ -749,7 +724,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: null,
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
-          lastKnownPr: null,
+          lastKnownPr: workspace.lastKnownPr,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,

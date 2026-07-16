@@ -13,6 +13,10 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import {
+  contextualWorkspaceGitAction,
+  deriveWorkspaceGitPresentationState,
+} from "@synara/shared/pullRequest";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -405,7 +409,8 @@ export default function GitActionsControl({
   const visiblePr = resolvePullRequestAssociation({
     live: gitStatus?.pr ?? null,
     persisted: persistedPr,
-    liveUnavailable: gitStatus === null || gitStatusError !== null,
+    liveUnavailable:
+      gitStatus === null || gitStatusError !== null || gitStatus.prUnavailable === true,
   });
   const visibleStatusPr = visiblePr
     ? {
@@ -417,6 +422,13 @@ export default function GitActionsControl({
         changedFiles: visiblePr.changedFiles ?? null,
       }
     : null;
+  const workspaceGitPresentationState = deriveWorkspaceGitPresentationState({
+    workspaceState: activeWorkspace?.state ?? "ready",
+    hasBranch: (gitStatus?.branch ?? currentBranch ?? activeThread?.branch ?? null) !== null,
+    published: gitStatus?.publication?.state === "published",
+    pr: visiblePr,
+  });
+  const contextualGitAction = contextualWorkspaceGitAction(workspaceGitPresentationState);
   const gitStatusWithPersistedPr =
     gitStatus && gitStatus.pr === null && visibleStatusPr
       ? { ...gitStatus, pr: visibleStatusPr }
@@ -552,10 +564,16 @@ export default function GitActionsControl({
   );
 
   const quickAction = useMemo(() => {
-    if (!gitStatusForActions && !isGitActionRunning && visibleStatusPr?.state === "open") {
-      return { label: "View PR", disabled: false, kind: "open_pr" as const };
+    if (!gitStatusForActions && !isGitActionRunning && contextualGitAction.available) {
+      if (workspaceGitPresentationState.startsWith("pr-") && contextualGitAction.label) {
+        return {
+          label: contextualGitAction.label,
+          disabled: false,
+          kind: "open_pr" as const,
+        };
+      }
     }
-    return resolveQuickAction(
+    const resolved = resolveQuickAction(
       gitStatusForActions,
       isGitActionRunning,
       isDefaultBranch,
@@ -563,14 +581,18 @@ export default function GitActionsControl({
       shouldOfferCreateBranch,
       defaultBranchName,
     );
+    return resolved.kind === "open_pr" && contextualGitAction.label
+      ? { ...resolved, label: contextualGitAction.label }
+      : resolved;
   }, [
+    contextualGitAction,
     defaultBranchName,
     gitStatusForActions,
     hasOriginRemote,
     isDefaultBranch,
     isGitActionRunning,
     shouldOfferCreateBranch,
-    visibleStatusPr?.state,
+    workspaceGitPresentationState,
   ]);
   const gitActionMenuItems = useMemo(
     () =>
@@ -710,11 +732,11 @@ export default function GitActionsControl({
   );
 
   const openExistingPr = useCallback(() => {
-    const pullRequest = visibleStatusPr?.state === "open" ? visibleStatusPr : null;
+    const pullRequest = visibleStatusPr;
     if (!pullRequest) {
       toastManager.add({
         type: "error",
-        title: "No open PR found.",
+        title: "No pull request found.",
         data: threadToastData,
       });
       return;

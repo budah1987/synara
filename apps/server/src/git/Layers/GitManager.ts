@@ -1562,9 +1562,12 @@ export const makeGitManager = Effect.gen(function* () {
     // Legacy callers may degrade when GitHub is unavailable. An explicitly selected account is
     // authoritative: surface authentication failures instead of misreporting "no PR".
     const resilientPrEffect = input.account
-      ? latestPrEffect
-      : latestPrEffect.pipe(Effect.catch(() => Effect.succeed(null)));
-    const [publication, pr] = yield* Effect.all([publicationEffect, resilientPrEffect], {
+      ? latestPrEffect.pipe(Effect.map((pr) => ({ pr, prUnavailable: false })))
+      : latestPrEffect.pipe(
+          Effect.map((pr) => ({ pr, prUnavailable: false })),
+          Effect.catch(() => Effect.succeed({ pr: null, prUnavailable: true })),
+        );
+    const [publication, prResult] = yield* Effect.all([publicationEffect, resilientPrEffect], {
       concurrency: 2,
     });
 
@@ -1577,7 +1580,8 @@ export const makeGitManager = Effect.gen(function* () {
       aheadCount: details.aheadCount,
       behindCount: details.behindCount,
       ...(publication ? { publication } : {}),
-      pr,
+      pr: prResult.pr,
+      ...(prResult.prUnavailable ? { prUnavailable: true } : {}),
     };
   });
 

@@ -193,6 +193,17 @@ describe("worktree workspace commands", () => {
         },
       }),
     );
+    const siblingEvent = (Array.isArray(sibling) ? sibling[0] : sibling) as Omit<
+      OrchestrationEvent,
+      "sequence"
+    >;
+    expect(siblingEvent.payload).toMatchObject({
+      workspaceId: "workspace-pr",
+      lastKnownPr: {
+        number: 42,
+        url: "https://github.com/example/repo/pull/42",
+      },
+    });
     const readModelWithSibling = await apply(
       readModel,
       Array.isArray(sibling) ? sibling : [sibling],

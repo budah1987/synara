@@ -62,6 +62,33 @@ export function pullRequestsMatch(
   );
 }
 
+export function pullRequestFromSourceRef(
+  sourceRef: string | null | undefined,
+): Pick<OrchestrationThreadPullRequest, "number" | "url"> | null {
+  if (!sourceRef) return null;
+  try {
+    const match = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/.*)?$/i.exec(new URL(sourceRef).pathname);
+    const number = Number.parseInt(match?.[1] ?? "", 10);
+    if (!Number.isSafeInteger(number) || number <= 0) return null;
+    const reference = { number, url: sourceRef };
+    return canonicalPullRequestIdentity(reference) ? reference : null;
+  } catch {
+    return null;
+  }
+}
+
+export function workspaceReferencesPullRequest(
+  workspace: Pick<OrchestrationWorktreeWorkspace, "lastKnownPr" | "sourceRef">,
+  pullRequest: Pick<OrchestrationThreadPullRequest, "number" | "url">,
+): boolean {
+  const sourcePullRequest = pullRequestFromSourceRef(workspace.sourceRef);
+  return (
+    (workspace.lastKnownPr !== null &&
+      pullRequestsMatch(workspace.lastKnownPr, pullRequest)) ||
+    (sourcePullRequest !== null && pullRequestsMatch(sourcePullRequest, pullRequest))
+  );
+}
+
 export function findWorkspaceForPullRequest(
   workspaces: readonly OrchestrationWorktreeWorkspace[],
   projectId: string,
@@ -72,8 +99,7 @@ export function findWorkspaceForPullRequest(
       (workspace) =>
         workspace.projectId === projectId &&
         workspace.deletedAt === null &&
-        ((workspace.lastKnownPr !== null && pullRequestsMatch(workspace.lastKnownPr, pr)) ||
-          workspace.sourceRef?.trim().replace(/\/$/, "") === pr.url.trim().replace(/\/$/, "")),
+        workspaceReferencesPullRequest(workspace, pr),
     ) ?? null
   );
 }

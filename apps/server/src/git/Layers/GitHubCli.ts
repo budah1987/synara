@@ -1094,7 +1094,8 @@ const makeGitHubCli = Effect.sync(() => {
           }),
         );
   };
-  const repositorySelector = (repository: string) => `${GITHUB_HOST}/${repository}`;
+  const repositorySelector = (repository: string, account?: GitHubAccountSelection) =>
+    `${account?.host ?? GITHUB_HOST}/${repository}`;
 
   // One implementation behind both list methods so the field list, decoding, and
   // normalization cannot drift between the open-only and any-state lookups.
@@ -1233,7 +1234,15 @@ const makeGitHubCli = Effect.sync(() => {
     getViewerLogin: (input) =>
       execute({
         cwd: input.cwd,
-        args: ["api", "user", "--hostname", GITHUB_HOST, "--jq", ".login"],
+        args: [
+          "api",
+          "user",
+          "--hostname",
+          input.account?.host ?? GITHUB_HOST,
+          "--jq",
+          ".login",
+        ],
+        ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.flatMap((result) => {
           const login = result.stdout.trim();
@@ -1265,7 +1274,7 @@ const makeGitHubCli = Effect.sync(() => {
               "pr",
               "list",
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               ...involvementArgs,
               "--state",
               input.state,
@@ -1274,6 +1283,7 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) => decodeRepositoryPullRequestListJson(result.stdout)),
@@ -1289,10 +1299,11 @@ const makeGitHubCli = Effect.sync(() => {
               "view",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1334,6 +1345,7 @@ const makeGitHubCli = Effect.sync(() => {
               "--json",
               "number",
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1356,10 +1368,11 @@ const makeGitHubCli = Effect.sync(() => {
               "view",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               PULL_REQUEST_DETAIL_JSON_FIELDS,
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1380,10 +1393,11 @@ const makeGitHubCli = Effect.sync(() => {
             args: [
               "repo",
               "view",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--json",
               "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,deleteBranchOnMerge",
             ],
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.flatMap((result) =>
@@ -1413,13 +1427,14 @@ const makeGitHubCli = Effect.sync(() => {
               "diff",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--color",
               "never",
               "--patch",
             ],
             maxBufferBytes: PULL_REQUEST_DIFF_MAX_BYTES,
             outputMode: "truncate",
+            ...(input.account ? { account: input.account } : {}),
           }).pipe(
             Effect.map((result) => ({
               patch: result.stdout,
@@ -1441,7 +1456,7 @@ const makeGitHubCli = Effect.sync(() => {
       validateRepository(input.repository, "runPullRequestAction").pipe(
         Effect.flatMap((repository) => {
           const reference = String(input.number);
-          const repoArgs = ["--repo", repositorySelector(repository)];
+          const repoArgs = ["--repo", repositorySelector(repository, input.account)];
           const args = (() => {
             switch (input.action) {
               case "merge":
@@ -1456,7 +1471,11 @@ const makeGitHubCli = Effect.sync(() => {
                 return ["pr", "reopen", reference, ...repoArgs];
             }
           })();
-          return execute({ cwd: input.cwd, args }).pipe(Effect.asVoid);
+          return execute({
+            cwd: input.cwd,
+            args,
+            ...(input.account ? { account: input.account } : {}),
+          }).pipe(Effect.asVoid);
         }),
       ),
     commentOnPullRequest: (input) =>
@@ -1472,11 +1491,12 @@ const makeGitHubCli = Effect.sync(() => {
               "comment",
               String(input.number),
               "--repo",
-              repositorySelector(repository),
+              repositorySelector(repository, input.account),
               "--body-file",
               "-",
             ],
             stdin: input.body,
+            ...(input.account ? { account: input.account } : {}),
           }),
         ),
         Effect.asVoid,

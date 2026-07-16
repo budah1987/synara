@@ -87,6 +87,23 @@ describe("GitStatusResult", () => {
     });
 
     expect(parsed.workingTree.isPartial).toBeUndefined();
+    expect(parsed.prUnavailable).toBeUndefined();
+  });
+
+  it("decodes explicit unavailable PR discovery", () => {
+    const parsed = decodeStatusResult({
+      branch: "feature/offline",
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+      hasUpstream: true,
+      upstreamBranch: "feature/offline",
+      aheadCount: 0,
+      behindCount: 0,
+      pr: null,
+      prUnavailable: true,
+    });
+
+    expect(parsed.prUnavailable).toBe(true);
   });
 });
 

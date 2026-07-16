@@ -23,6 +23,59 @@ afterEach(() => {
 });
 
 layer("GitHubCliLive", (it) => {
+  it.effect("loads the dedicated pull request viewer with the selected account", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce({
+          stdout: "selected-account-token\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: "alice\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+
+      const gh = yield* GitHubCli;
+      const viewer = yield* gh.getViewerLogin({
+        cwd: "/repo",
+        account: { host: "enterprise.example.com", login: "alice" },
+      });
+
+      assert.equal(viewer, "alice");
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "auth",
+        "token",
+        "--hostname",
+        "enterprise.example.com",
+        "--user",
+        "alice",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "api",
+        "user",
+        "--hostname",
+        "enterprise.example.com",
+        "--jq",
+        ".login",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({
+          cwd: "/repo",
+          env: expect.objectContaining({
+            GH_HOST: "enterprise.example.com",
+            GH_TOKEN: "selected-account-token",
+          }),
+        }),
+      );
+    }),
+  );
+
   it.effect("lists healthy GitHub CLI accounts without inherited token overrides", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({

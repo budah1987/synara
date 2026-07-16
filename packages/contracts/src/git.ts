@@ -410,6 +410,8 @@ export const GitStatusResult = Schema.Struct({
   behindCount: NonNegativeInt,
   publication: Schema.optional(GitBranchPublication),
   pr: Schema.NullOr(GitStatusPr),
+  /** True when live PR discovery failed and persisted workspace metadata should be retained. */
+  prUnavailable: Schema.optional(Schema.Boolean),
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
 
@@ -427,6 +429,7 @@ export const GitStatusRemoteResult = Schema.Struct({
   behindCount: NonNegativeInt,
   publication: GitStatusResult.fields.publication,
   pr: Schema.NullOr(GitStatusPr),
+  prUnavailable: GitStatusResult.fields.prUnavailable,
 });
 export type GitStatusRemoteResult = typeof GitStatusRemoteResult.Type;
 

@@ -747,6 +747,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.branch).toBe("feature/status-no-gh");
       expect(status.pr).toBeNull();
+      expect(status.prUnavailable).toBe(true);
     }),
   );
 

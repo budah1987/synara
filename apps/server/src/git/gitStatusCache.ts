@@ -51,6 +51,7 @@ export function splitRemoteStatus(status: GitStatusResult): GitStatusRemoteResul
     behindCount: status.behindCount,
     ...(status.publication ? { publication: status.publication } : {}),
     pr: status.pr,
+    ...(status.prUnavailable ? { prUnavailable: true } : {}),
   };
 }
 
@@ -65,6 +66,7 @@ export function splitRemoteStatusDetails(
     behindCount: status.behindCount,
     ...(cachedRemote?.publication ? { publication: cachedRemote.publication } : {}),
     pr: cachedRemote?.pr ?? null,
+    ...(cachedRemote?.prUnavailable ? { prUnavailable: true } : {}),
   };
 }
 
