@@ -4,13 +4,31 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ProjectId, type ProjectDevServer, type ServerLocalServerProcess } from "@synara/contracts";
+import {
+  DEFAULT_TERMINAL_ID,
+  ProjectId,
+  WorktreeWorkspaceId,
+  type ProjectDevServer,
+  type ServerLocalServerProcess,
+  type TerminalEvent,
+  type TerminalSessionSnapshot,
+} from "@synara/contracts";
+import { Effect, Fiber, Layer, Stream } from "effect";
 
-import { findProjectDevServerForLocalServer } from "./devServerManager";
+import {
+  DevServerManager,
+  DevServerManagerLive,
+  findProjectDevServerForLocalServer,
+} from "./devServerManager";
+import {
+  TerminalManager,
+  type TerminalManagerShape,
+} from "./terminal/Services/Manager";
 
 function makeDevServer(overrides: Partial<ProjectDevServer> = {}): ProjectDevServer {
   return {
     projectId: ProjectId.makeUnsafe("project-1"),
+    workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
     command: "pnpm run dev",
     cwd: "/repo/app",
     pid: 100,
@@ -18,6 +36,101 @@ function makeDevServer(overrides: Partial<ProjectDevServer> = {}): ProjectDevSer
     status: "running",
     ...overrides,
   };
+}
+
+type TerminalOpenCall = Parameters<TerminalManagerShape["open"]>[0];
+type TerminalWriteCall = Parameters<TerminalManagerShape["write"]>[0];
+type TerminalCloseCall = Parameters<TerminalManagerShape["close"]>[0];
+
+function makeTerminalManagerDouble() {
+  const openCalls: TerminalOpenCall[] = [];
+  const writeCalls: TerminalWriteCall[] = [];
+  const closeCalls: TerminalCloseCall[] = [];
+  let listener: ((event: TerminalEvent) => void) | null = null;
+  let nextPid = 4_000;
+
+  const service: TerminalManagerShape = {
+    open: (input) => {
+      openCalls.push(input);
+      const snapshot: TerminalSessionSnapshot = {
+        threadId: input.threadId,
+        terminalId: input.terminalId ?? DEFAULT_TERMINAL_ID,
+        cwd: input.cwd,
+        status: "running",
+        pid: nextPid++,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        updatedAt: "2026-07-16T00:00:00.000Z",
+      };
+      return Effect.succeed(snapshot);
+    },
+    write: (input) => {
+      writeCalls.push(input);
+      return Effect.void;
+    },
+    close: (input) => {
+      closeCalls.push(input);
+      return Effect.void;
+    },
+    subscribe: (nextListener) =>
+      Effect.sync(() => {
+        listener = nextListener;
+        return () => {
+          if (listener === nextListener) {
+            listener = null;
+          }
+        };
+      }),
+    ackOutput: () => Effect.void,
+    resize: () => Effect.void,
+    clear: () => Effect.void,
+    restart: () => Effect.die("restart is not used by dev-server tests"),
+    dispose: Effect.void,
+  };
+
+  return {
+    service,
+    openCalls,
+    writeCalls,
+    closeCalls,
+    emitExit(threadId: string) {
+      listener?.({
+        type: "exited",
+        threadId,
+        terminalId: DEFAULT_TERMINAL_ID,
+        createdAt: "2026-07-16T00:00:01.000Z",
+        exitCode: 1,
+        exitSignal: null,
+      });
+    },
+    emitError(threadId: string, message: string) {
+      listener?.({
+        type: "error",
+        threadId,
+        terminalId: DEFAULT_TERMINAL_ID,
+        createdAt: "2026-07-16T00:00:01.000Z",
+        message,
+      });
+    },
+  };
+}
+
+function workspaceTarget(workspaceId: string) {
+  return {
+    projectId: ProjectId.makeUnsafe("project-1"),
+    workspaceId: WorktreeWorkspaceId.makeUnsafe(workspaceId),
+  };
+}
+
+function runWithDevServerManager<A>(
+  terminal: TerminalManagerShape,
+  effect: Effect.Effect<A, never, DevServerManager>,
+): Promise<A> {
+  const layer = DevServerManagerLive.pipe(
+    Layer.provide(Layer.succeed(TerminalManager, terminal)),
+  );
+  return Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.scoped));
 }
 
 function makeLocalServer(
@@ -66,5 +179,210 @@ describe("findProjectDevServerForLocalServer", () => {
         devServers: [makeDevServer({ cwd: "/repo/app" })],
       }),
     ).toBeNull();
+  });
+
+  it("prefers process lineage and then the deepest matching workspace", () => {
+    const repositoryRoot = makeDevServer({
+      workspaceId: WorktreeWorkspaceId.makeUnsafe("repository-root"),
+      cwd: "/repo",
+      pid: 100,
+    });
+    const workspace = makeDevServer({
+      workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+      cwd: "/repo/worktrees/one",
+      pid: 200,
+    });
+
+    expect(
+      findProjectDevServerForLocalServer({
+        localServer: makeLocalServer({ cwd: "/repo/worktrees/one/apps/web", ppid: 200 }),
+        devServers: [repositoryRoot, workspace],
+      }),
+    ).toBe(workspace);
+    expect(
+      findProjectDevServerForLocalServer({
+        localServer: makeLocalServer({ cwd: "/repo/worktrees/one/apps/web", ppid: null }),
+        devServers: [repositoryRoot, workspace],
+      }),
+    ).toBe(workspace);
+  });
+});
+
+describe("DevServerManager", () => {
+  it("keeps two workspace runs in the reconnect snapshot and forwards cwd and env", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const first = workspaceTarget("workspace-1");
+    const second = workspaceTarget("workspace-2");
+
+    const snapshot = await runWithDevServerManager(
+      terminal.service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({
+          ...first,
+          command: "bun run dev",
+          cwd: "/repo/worktrees/one",
+          env: {
+            SYNARA_PROJECT_ROOT: "/repo",
+            SYNARA_WORKTREE_PATH: "/repo/worktrees/one",
+          },
+        });
+        yield* manager.run({
+          ...second,
+          command: "bun run dev --port 4001",
+          cwd: "/repo/worktrees/two",
+          env: {
+            SYNARA_PROJECT_ROOT: "/repo",
+            SYNARA_WORKTREE_PATH: "/repo/worktrees/two",
+          },
+        });
+        return yield* manager.list;
+      }),
+    );
+
+    expect(snapshot.servers).toHaveLength(2);
+    expect(snapshot.servers.map((server) => server.workspaceId)).toEqual([
+      "workspace-1",
+      "workspace-2",
+    ]);
+    expect(terminal.openCalls).toMatchObject([
+      {
+        cwd: "/repo/worktrees/one",
+        env: {
+          SYNARA_PROJECT_ROOT: "/repo",
+          SYNARA_WORKTREE_PATH: "/repo/worktrees/one",
+        },
+      },
+      {
+        cwd: "/repo/worktrees/two",
+        env: {
+          SYNARA_PROJECT_ROOT: "/repo",
+          SYNARA_WORKTREE_PATH: "/repo/worktrees/two",
+        },
+      },
+    ]);
+    expect(terminal.openCalls[0]?.threadId).not.toBe(terminal.openCalls[1]?.threadId);
+    expect(terminal.writeCalls.map((call) => call.data)).toEqual([
+      "bun run dev\r",
+      "bun run dev --port 4001\r",
+    ]);
+  });
+
+  it("stops only the selected workspace run", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const first = workspaceTarget("workspace-1");
+    const second = workspaceTarget("workspace-2");
+
+    const result = await runWithDevServerManager(
+      terminal.service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...first, command: "dev one", cwd: "/repo/one" });
+        yield* manager.run({ ...second, command: "dev two", cwd: "/repo/two" });
+        const stopped = yield* manager.stop(first);
+        const snapshot = yield* manager.list;
+        return { stopped, snapshot };
+      }),
+    );
+
+    expect(result.stopped).toEqual({ stopped: true });
+    expect(result.snapshot.servers).toMatchObject([{ workspaceId: "workspace-2" }]);
+    expect(terminal.closeCalls).toHaveLength(1);
+    expect(terminal.closeCalls[0]?.threadId).toBe(terminal.openCalls[0]?.threadId);
+  });
+
+  it("reaps only the workspace whose synthetic terminal exits and preserves exit detail", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const first = workspaceTarget("workspace-1");
+    const second = workspaceTarget("workspace-2");
+
+    const result = await runWithDevServerManager(
+      terminal.service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...first, command: "dev one", cwd: "/repo/one" });
+        yield* manager.run({ ...second, command: "dev two", cwd: "/repo/two" });
+        const eventFiber = yield* Stream.runCollect(Stream.take(manager.stream, 1)).pipe(
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        terminal.emitExit(terminal.openCalls[0]?.threadId ?? "");
+        const events = Array.from(yield* Fiber.join(eventFiber));
+        const snapshot = yield* manager.list;
+        return { events, snapshot };
+      }),
+    );
+
+    expect(result.snapshot.servers).toMatchObject([{ workspaceId: "workspace-2" }]);
+    expect(result.events).toEqual([
+      {
+        type: "removed",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        reason: "exited",
+        exitCode: 1,
+        exitSignal: null,
+      },
+    ]);
+  });
+
+  it("preserves terminal error detail on the removed event", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-1");
+
+    const events = await runWithDevServerManager(
+      terminal.service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...target, command: "dev one", cwd: "/repo/one" });
+        const eventFiber = yield* Stream.runCollect(Stream.take(manager.stream, 1)).pipe(
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        terminal.emitError(
+          terminal.openCalls[0]?.threadId ?? "",
+          "listen EADDRINUSE: address already in use",
+        );
+        return Array.from(yield* Fiber.join(eventFiber));
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        type: "removed",
+        projectId: "project-1",
+        workspaceId: "workspace-1",
+        reason: "exited",
+        message: "listen EADDRINUSE: address already in use",
+      },
+    ]);
+  });
+
+  it("ignores a delayed exit from a run that has already been replaced", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-1");
+
+    const snapshot = await runWithDevServerManager(
+      terminal.service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...target, command: "dev old", cwd: "/repo/one" });
+        const staleThreadId = terminal.openCalls[0]?.threadId ?? "";
+        yield* manager.run({ ...target, command: "dev replacement", cwd: "/repo/one" });
+
+        expect(terminal.openCalls[1]?.threadId).not.toBe(staleThreadId);
+        terminal.emitExit(staleThreadId);
+        yield* Effect.sleep("10 millis");
+        return yield* manager.list;
+      }),
+    );
+
+    expect(snapshot.servers).toMatchObject([
+      {
+        workspaceId: "workspace-1",
+        command: "dev replacement",
+        pid: 4_001,
+      },
+    ]);
   });
 });

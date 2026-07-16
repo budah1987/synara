@@ -475,7 +475,10 @@ export const makeWsRpcLayer = () =>
           });
           if (trackedServer) {
             yield* devServerManager
-              .stop({ projectId: trackedServer.projectId })
+              .stop({
+                projectId: trackedServer.projectId,
+                workspaceId: trackedServer.workspaceId,
+              })
               .pipe(Effect.catch(() => Effect.void));
           }
         }

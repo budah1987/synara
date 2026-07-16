@@ -72,6 +72,10 @@
       "types": "./src/localServers.ts",
       "import": "./src/localServers.ts"
     },
+    "./projectDevServers": {
+      "types": "./src/projectDevServers.ts",
+      "import": "./src/projectDevServers.ts"
+    },
     "./browserShortcuts": {
       "types": "./src/browserShortcuts.ts",
       "import": "./src/browserShortcuts.ts"

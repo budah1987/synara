@@ -1306,7 +1306,7 @@ function EventRouter() {
       } else if (event.type === "upserted") {
         store.upsertRun(event.server);
       } else {
-        store.removeRun(event.projectId);
+        store.removeRun({ projectId: event.projectId, workspaceId: event.workspaceId });
       }
       invalidateLocalServers();
     });
