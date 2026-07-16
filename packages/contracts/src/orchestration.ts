@@ -1055,8 +1055,9 @@ export const WorktreeWorkspaceCreateCommand = Schema.Struct({
   title: TrimmedNonEmptyString,
   targetRef: TrimmedNonEmptyString,
   branch: Schema.optional(TrimmedNonEmptyString),
-  sourceKind: Schema.optional(Schema.Literals(["new-branch", "branch"])),
+  sourceKind: Schema.optional(Schema.Literals(["new-branch", "branch", "pull-request"])),
   sourceRef: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  lastKnownPr: Schema.optional(OrchestrationThreadPullRequest),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
@@ -1710,6 +1711,8 @@ export const WorktreeWorkspaceProvisionCompleteCommand = Schema.Struct({
   headRef: TrimmedNonEmptyString,
   targetResolvedCommit: TrimmedNonEmptyString,
   createdFromCommit: TrimmedNonEmptyString,
+  targetRef: Schema.optional(TrimmedNonEmptyString),
+  lastKnownPr: Schema.optional(OrchestrationThreadPullRequest),
   setupStatus: Schema.Literals(["succeeded", "skipped"]),
   completedAt: IsoDateTime,
 });

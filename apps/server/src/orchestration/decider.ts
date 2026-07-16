@@ -19,7 +19,9 @@ import {
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import {
+  findWorkspaceForPullRequest,
   pullRequestFromSourceRef,
+  pullRequestsMatch,
   workspaceReferencesPullRequest,
 } from "@synara/shared/pullRequest";
 import {
@@ -55,20 +57,30 @@ const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "stud
 
 type PullRequestReference = Pick<OrchestrationThreadPullRequest, "number" | "url">;
 
-function findActiveWorkspaceForPullRequest(input: {
+function findReservedWorkspaceForPullRequest(input: {
   readonly readModel: OrchestrationReadModel;
   readonly projectId: string;
   readonly pullRequest: PullRequestReference;
   readonly excludeWorkspaceId?: string;
 }): OrchestrationWorktreeWorkspace | undefined {
-  return (input.readModel.workspaces ?? []).find(
-    (workspace) =>
-      workspace.id !== input.excludeWorkspaceId &&
-      workspace.projectId === input.projectId &&
-      workspace.deletedAt === null &&
-      workspace.state !== "archived" &&
-      workspaceReferencesPullRequest(workspace, input.pullRequest),
+  return (
+    findWorkspaceForPullRequest(
+      (input.readModel.workspaces ?? []).filter(
+        (workspace) => workspace.id !== input.excludeWorkspaceId,
+      ),
+      input.projectId,
+      input.pullRequest,
+    ) ?? undefined
   );
+}
+
+function duplicatePullRequestWorkspaceDetail(
+  pullRequest: PullRequestReference,
+  workspace: OrchestrationWorktreeWorkspace,
+): string {
+  return workspace.state === "archived"
+    ? `Pull request #${pullRequest.number} belongs to archived workspace '${workspace.id}'. Restore that workspace instead.`
+    : `Pull request #${pullRequest.number} is already attached to workspace '${workspace.id}'.`;
 }
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
@@ -473,6 +485,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
 
+      const sourceKind = command.sourceKind ?? "new-branch";
+      const requestedPullRequest = command.lastKnownPr ?? null;
+      const pullRequestSource = pullRequestFromSourceRef(command.sourceRef);
+      if (sourceKind === "pull-request") {
+        if (!requestedPullRequest || !pullRequestSource) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "Pull-request workspaces require durable pull request metadata and a canonical pull request URL source.",
+          });
+        }
+        if (!pullRequestsMatch(requestedPullRequest, pullRequestSource)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "The pull request source URL does not match the requested pull request metadata.",
+          });
+        }
+        const existingPrWorkspace = findReservedWorkspaceForPullRequest({
+          readModel,
+          projectId: command.projectId,
+          pullRequest: requestedPullRequest,
+        });
+        if (existingPrWorkspace) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: duplicatePullRequestWorkspaceDetail(
+              requestedPullRequest,
+              existingPrWorkspace,
+            ),
+          });
+        }
+      } else if (requestedPullRequest) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Pull request metadata requires sourceKind 'pull-request'.",
+        });
+      }
+
+      const targetRef = requestedPullRequest?.baseBranch ?? command.targetRef;
+      const branch = command.branch ?? requestedPullRequest?.headBranch ?? null;
+      const sourceRef = command.sourceRef ?? command.targetRef;
+
       const workspaceEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "workspace",
@@ -489,17 +543,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           state: "provisioning",
           title: command.title,
           path: null,
-          branch: command.branch ?? null,
+          branch,
           headRef: null,
-          targetRef: command.targetRef,
+          targetRef,
           targetResolvedCommit: null,
           createdFromCommit: null,
-          sourceKind: command.sourceKind ?? "new-branch",
-          sourceRef: command.sourceRef ?? command.targetRef,
+          sourceKind,
+          sourceRef,
           setupStatus: "pending",
           setupError: null,
           setupLogId: null,
-          lastKnownPr: null,
+          lastKnownPr: requestedPullRequest,
           isPinned: false,
           lifecycleGeneration: 1,
           activeOperation: {
@@ -547,7 +601,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentRole: null,
           forkSourceThreadId: null,
           sidechatSourceThreadId: null,
-          lastKnownPr: null,
+          lastKnownPr: requestedPullRequest,
           handoff: null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
@@ -575,7 +629,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const requestedPullRequest =
         command.lastKnownPr ?? pullRequestFromSourceRef(command.sourceRef);
       if (requestedPullRequest) {
-        const existingPrWorkspace = findActiveWorkspaceForPullRequest({
+        const existingPrWorkspace = findReservedWorkspaceForPullRequest({
           readModel,
           projectId: command.projectId,
           pullRequest: requestedPullRequest,
@@ -583,7 +637,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: `Pull request #${requestedPullRequest.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
+            detail: duplicatePullRequestWorkspaceDetail(
+              requestedPullRequest,
+              existingPrWorkspace,
+            ),
           });
         }
       }
@@ -760,7 +817,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (command.lastKnownPr) {
-        const existingPrWorkspace = findActiveWorkspaceForPullRequest({
+        const existingPrWorkspace = findReservedWorkspaceForPullRequest({
           readModel,
           projectId: workspace.projectId,
           pullRequest: command.lastKnownPr,
@@ -769,7 +826,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: `Pull request #${command.lastKnownPr.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
+            detail: duplicatePullRequestWorkspaceDetail(
+              command.lastKnownPr,
+              existingPrWorkspace,
+            ),
           });
         }
       }
@@ -974,7 +1034,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Stale workspace completion for '${workspace.id}' was rejected.`,
         });
       }
-      return {
+      if (workspace.sourceKind === "pull-request") {
+        if (!command.lastKnownPr || !command.targetRef) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Pull-request workspace '${workspace.id}' completion requires refreshed pull request metadata.`,
+          });
+        }
+        if (!workspaceReferencesPullRequest(workspace, command.lastKnownPr)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Pull request #${command.lastKnownPr.number} does not match workspace '${workspace.id}'.`,
+          });
+        }
+        if (command.targetRef !== command.lastKnownPr.baseBranch) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "The resolved pull request base does not match the completion target ref.",
+          });
+        }
+      }
+
+      const readyEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "workspace",
           aggregateId: command.workspaceId,
@@ -995,6 +1076,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           completedAt: command.completedAt,
         },
       };
+      if (workspace.sourceKind !== "pull-request") {
+        return readyEvent;
+      }
+      const lastKnownPr = command.lastKnownPr!;
+      const metadataEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: command.workspaceId,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.meta-updated",
+        payload: {
+          workspaceId: command.workspaceId,
+          targetRef: lastKnownPr.baseBranch,
+          lastKnownPr,
+          mutationRevision: workspace.mutationRevision + 1,
+          updatedAt: command.completedAt,
+        },
+      };
+      return [readyEvent, metadataEvent];
     }
 
     case "workspace.archive.complete": {

@@ -89,6 +89,63 @@ it.effect("decodes last-known PRs persisted before draft/mergeability/diff field
   }),
 );
 
+it.effect("decodes managed pull-request workspace creation and completion metadata", () =>
+  Effect.gen(function* () {
+    const pullRequest = {
+      number: 42,
+      title: "Review the workspace flow",
+      url: "https://github.com/acme/repo/pull/42",
+      baseBranch: "develop",
+      headBranch: "feature/review-flow",
+      state: "open" as const,
+    };
+    const created = yield* decodeOrchestrationCommand({
+      type: "workspace.create",
+      commandId: "command-pr-workspace",
+      workspaceId: "workspace-pr-42",
+      threadId: "thread-pr-42",
+      projectId: "project-pr",
+      operationId: "operation-pr-42",
+      title: "Review the workspace flow",
+      targetRef: "develop",
+      sourceKind: "pull-request",
+      sourceRef: pullRequest.url,
+      lastKnownPr: pullRequest,
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-07-16T00:00:00.000Z",
+    });
+    assert.equal(created.type, "workspace.create");
+    if (created.type === "workspace.create") {
+      assert.equal(created.sourceKind, "pull-request");
+      assert.equal(created.lastKnownPr?.number, 42);
+    }
+
+    const completed = yield* decodeOrchestrationCommand({
+      type: "workspace.provision.complete",
+      commandId: "command-pr-complete",
+      workspaceId: "workspace-pr-42",
+      operationId: "operation-pr-42",
+      generation: 1,
+      path: "/tmp/workspaces/workspace-pr-42",
+      branch: "feature/review-flow",
+      headRef: "abc123",
+      targetResolvedCommit: "def456",
+      createdFromCommit: "abc123",
+      targetRef: "develop",
+      lastKnownPr: pullRequest,
+      setupStatus: "skipped",
+      completedAt: "2026-07-16T00:00:01.000Z",
+    });
+    assert.equal(completed.type, "workspace.provision.complete");
+    if (completed.type === "workspace.provision.complete") {
+      assert.equal(completed.targetRef, "develop");
+      assert.equal(completed.lastKnownPr?.headBranch, "feature/review-flow");
+    }
+  }),
+);
+
 it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
   Effect.gen(function* () {
     const codec = Schema.toCodecJson(OrchestrationReadModel);

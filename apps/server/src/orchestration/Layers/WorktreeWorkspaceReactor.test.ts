@@ -20,7 +20,9 @@ import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
 import { DevServerManager, type DevServerManagerShape } from "../../devServerManager";
+import { GitManagerError } from "../../git/Errors";
 import { GitCoreLive } from "../../git/Layers/GitCore";
+import { GitManager, type GitManagerShape } from "../../git/Services/GitManager";
 import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { decideOrchestrationCommand } from "../decider";
 import { projectEvent } from "../projector";
@@ -51,6 +53,22 @@ const runtimeSafetyLayer = Layer.merge(
     dispose: Effect.void,
   } satisfies TerminalManagerShape),
 );
+
+const unusedGitManager = () => Effect.die("GitManager should not be used in this test");
+const gitManagerLayer = (
+  preparePullRequestThread: GitManagerShape["preparePullRequestThread"] = unusedGitManager,
+) =>
+  Layer.succeed(GitManager, {
+    status: unusedGitManager,
+    readWorkingTreeDiff: unusedGitManager,
+    summarizeDiff: unusedGitManager,
+    resolvePullRequest: unusedGitManager,
+    listPullRequests: unusedGitManager,
+    pullRequestSnapshot: unusedGitManager,
+    preparePullRequestThread,
+    handoffThread: unusedGitManager,
+    runStackedAction: unusedGitManager,
+  } satisfies GitManagerShape);
 
 describe("resolveWorkspaceBranchProvisioning", () => {
   it("checks out a free local branch without changing its identity", () => {
@@ -229,6 +247,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
         Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitManagerLayer()),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -410,6 +429,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
         Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitManagerLayer()),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -557,6 +577,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
         Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitManagerLayer()),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -589,6 +610,352 @@ describe("WorktreeWorkspaceReactor", () => {
         throw new Error("Expected workspace completion command");
       }
       expect(existsSync(join(completion.path, "feature.txt"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes and reuses a fork pull request at the deterministic managed path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-pr-reactor-"));
+    try {
+      const repository = join(root, "repository");
+      execFileSync("git", ["init", "-b", "main", repository]);
+      execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", repository, "config", "user.name", "Synara Test"]);
+      execFileSync("sh", ["-c", "printf base > fixture.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "base"]);
+      execFileSync("git", ["-C", repository, "branch", "develop"]);
+
+      const now = new Date().toISOString();
+      const projectId = ProjectId.makeUnsafe("project-pr-reactor");
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-pr-reactor");
+      const operationId = WorkspaceOperationId.makeUnsafe("operation-pr-reactor");
+      const managedPath = join(root, "worktrees", String(projectId), String(workspaceId));
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project",
+            title: "PR project",
+            workspaceRoot: repository,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: false,
+            repositoryIdentity: "github.com/acme/repo",
+            defaultTargetRef: "main",
+            githubAccount: { host: "github.com", login: "reviewer" },
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        workspaces: [
+          {
+            id: workspaceId,
+            projectId,
+            repositoryIdentity: "github.com/acme/repo",
+            kind: "managed",
+            state: "provisioning",
+            title: "Review fork PR",
+            path: null,
+            branch: "fork-head",
+            headRef: null,
+            targetRef: "main",
+            targetResolvedCommit: null,
+            createdFromCommit: null,
+            sourceKind: "pull-request",
+            sourceRef: "https://github.com/acme/repo/pull/42",
+            setupStatus: "pending",
+            setupError: null,
+            setupLogId: null,
+            lastKnownPr: {
+              number: 42,
+              title: "Review fork PR",
+              url: "https://github.com/acme/repo/pull/42",
+              baseBranch: "main",
+              headBranch: "fork-head",
+              state: "open",
+            },
+            isPinned: false,
+            lifecycleGeneration: 1,
+            activeOperation: {
+              id: operationId,
+              generation: 1,
+              kind: "provision",
+              stage: "intent-recorded",
+              startedAt: now,
+            },
+            lastFailure: null,
+            mutationRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        ],
+        threads: [],
+        updatedAt: now,
+      };
+      const commands: OrchestrationCommand[] = [];
+      const prepareCalls: Parameters<GitManagerShape["preparePullRequestThread"]>[0][] = [];
+      const preparePullRequestThread: GitManagerShape["preparePullRequestThread"] = (input) =>
+        Effect.sync(() => {
+          prepareCalls.push(input);
+          if (!existsSync(managedPath)) {
+            execFileSync("git", [
+              "-C",
+              repository,
+              "worktree",
+              "add",
+              "-b",
+              "synara/pr-42/fork-head",
+              managedPath,
+              "develop",
+            ]);
+          }
+          return {
+            pullRequest: {
+              number: 42,
+              title: "Review fork PR",
+              url: "https://github.com/acme/repo/pull/42",
+              baseBranch: "develop",
+              headBranch: "fork-head",
+              state: "open" as const,
+              isDraft: false,
+              mergeability: "mergeable" as const,
+              additions: 10,
+              deletions: 2,
+              changedFiles: 3,
+            },
+            branch: "synara/pr-42/fork-head",
+            worktreePath: managedPath,
+          };
+        });
+      const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        getReadModel: () => Effect.succeed(readModel),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length + 1 };
+          }),
+        repairState: () => Effect.succeed(readModel),
+        refreshCommandReadModel: () => Effect.succeed(readModel),
+        streamDomainEvents: Stream.empty,
+      });
+      const configLayer = ServerConfig.layerTest(repository, root);
+      const gitLayer = GitCoreLive.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(NodeServices.layer),
+      );
+      const layer = WorktreeWorkspaceReactorLive.pipe(
+        Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitManagerLayer(preparePullRequestThread)),
+        Layer.provideMerge(gitLayer),
+        Layer.provideMerge(configLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      const runReactor = () => {
+        const expectedCompletions =
+          commands.filter((command) => command.type === "workspace.provision.complete").length + 1;
+        return Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* (yield* WorktreeWorkspaceReactor).start;
+              for (
+                let attempt = 0;
+                attempt < 80 &&
+                commands.filter((command) => command.type === "workspace.provision.complete")
+                  .length < expectedCompletions;
+                attempt += 1
+              ) {
+                yield* Effect.sleep(25);
+              }
+            }),
+          ).pipe(Effect.provide(layer)),
+        );
+      };
+
+      await runReactor();
+      await runReactor();
+
+      expect(prepareCalls).toHaveLength(2);
+      for (const call of prepareCalls) {
+        expect(call).toEqual({
+          cwd: repository,
+          reference: "https://github.com/acme/repo/pull/42",
+          mode: "worktree",
+          managedWorktreePath: managedPath,
+          account: { host: "github.com", login: "reviewer" },
+        });
+      }
+      const completions = commands.filter(
+        (command) => command.type === "workspace.provision.complete",
+      );
+      expect(completions).toHaveLength(2);
+      expect(completions[0]).toMatchObject({
+        workspaceId,
+        operationId,
+        path: managedPath,
+        branch: "synara/pr-42/fork-head",
+        targetRef: "develop",
+        lastKnownPr: {
+          number: 42,
+          baseBranch: "develop",
+          headBranch: "fork-head",
+        },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a deterministic managed-path collision without retry mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-pr-collision-reactor-"));
+    try {
+      const repository = join(root, "repository");
+      execFileSync("git", ["init", "-b", "main", repository]);
+      execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", repository, "config", "user.name", "Synara Test"]);
+      execFileSync("sh", ["-c", "printf base > fixture.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "base"]);
+      const now = new Date().toISOString();
+      const projectId = ProjectId.makeUnsafe("project-pr-collision");
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-pr-collision");
+      const operationId = WorkspaceOperationId.makeUnsafe("operation-pr-collision");
+      const managedPath = join(root, "worktrees", String(projectId), String(workspaceId));
+      mkdirSync(managedPath, { recursive: true });
+      const readModel = {
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project" as const,
+            title: "Collision project",
+            workspaceRoot: repository,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: false,
+            repositoryIdentity: "github.com/acme/repo",
+            defaultTargetRef: "main",
+            githubAccount: null,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        workspaces: [
+          {
+            id: workspaceId,
+            projectId,
+            repositoryIdentity: "github.com/acme/repo",
+            kind: "managed" as const,
+            state: "provisioning" as const,
+            title: "Collision PR",
+            path: null,
+            branch: "feature/collision",
+            headRef: null,
+            targetRef: "main",
+            targetResolvedCommit: null,
+            createdFromCommit: null,
+            sourceKind: "pull-request" as const,
+            sourceRef: "https://github.com/acme/repo/pull/43",
+            setupStatus: "pending" as const,
+            setupError: null,
+            setupLogId: null,
+            lastKnownPr: {
+              number: 43,
+              title: "Collision PR",
+              url: "https://github.com/acme/repo/pull/43",
+              baseBranch: "main",
+              headBranch: "feature/collision",
+              state: "open" as const,
+            },
+            isPinned: false,
+            lifecycleGeneration: 1,
+            activeOperation: {
+              id: operationId,
+              generation: 1,
+              kind: "provision" as const,
+              stage: "intent-recorded",
+              startedAt: now,
+            },
+            lastFailure: null,
+            mutationRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        ],
+        threads: [],
+        updatedAt: now,
+      } satisfies OrchestrationReadModel;
+      const commands: OrchestrationCommand[] = [];
+      let prepareCalls = 0;
+      const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        getReadModel: () => Effect.succeed(readModel),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length + 1 };
+          }),
+        repairState: () => Effect.succeed(readModel),
+        refreshCommandReadModel: () => Effect.succeed(readModel),
+        streamDomainEvents: Stream.empty,
+      });
+      const configLayer = ServerConfig.layerTest(repository, root);
+      const gitLayer = GitCoreLive.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(NodeServices.layer),
+      );
+      const layer = WorktreeWorkspaceReactorLive.pipe(
+        Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(
+          gitManagerLayer(() => {
+            prepareCalls += 1;
+            return Effect.fail(
+              new GitManagerError({
+                operation: "preparePullRequestThread",
+                detail: `The managed worktree path '${managedPath}' is already occupied.`,
+              }),
+            );
+          }),
+        ),
+        Layer.provideMerge(gitLayer),
+        Layer.provideMerge(configLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* (yield* WorktreeWorkspaceReactor).start;
+            for (let attempt = 0; attempt < 80 && commands.length === 0; attempt += 1) {
+              yield* Effect.sleep(25);
+            }
+          }),
+        ).pipe(Effect.provide(layer)),
+      );
+
+      expect(prepareCalls).toBe(1);
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          type: "workspace.operation.fail",
+          workspaceId,
+          operationId,
+          generation: 1,
+          kind: "provision",
+          stage: "prepare-pull-request",
+          path: null,
+        }),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -701,6 +1068,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
         Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitManagerLayer()),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),

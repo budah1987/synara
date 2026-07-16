@@ -13,6 +13,7 @@ import { Cause, Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { ServerConfig } from "../../config";
 import { DevServerManager } from "../../devServerManager";
 import { GitCore } from "../../git/Services/GitCore";
+import { GitManager } from "../../git/Services/GitManager";
 import { TerminalManager } from "../../terminal/Services/Manager";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
 import { getWorkspaceLifecyclePreflight } from "../workspaceLifecyclePreflight";
@@ -91,6 +92,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitCore;
+  const gitManager = yield* GitManager;
   const devServerManager = yield* DevServerManager;
   const terminalManager = yield* TerminalManager;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -244,6 +246,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     let createdHead: string | null = null;
     let targetResolvedCommit: string | null = null;
     let createdFromCommit: string | null = null;
+    let refreshedPullRequest: OrchestrationWorktreeWorkspace["lastKnownPr"] = null;
     const sourceRef =
       workspace.sourceKind === "branch"
         ? (workspace.sourceRef ?? workspace.targetRef)
@@ -279,93 +282,149 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         );
 
     yield* Effect.gen(function* () {
-      stage = "resolve-target";
-      targetResolvedCommit = (yield* git.execute({
-        operation: "WorktreeWorkspaceReactor.resolveTarget",
-        cwd: project.workspaceRoot,
-        args: ["rev-parse", "--verify", `${workspace.targetRef}^{commit}`],
-      })).stdout.trim();
-      if (!targetResolvedCommit) {
-        return yield* Effect.fail(new Error(`Target '${workspace.targetRef}' has no commit`));
-      }
-
-      const existingPath = yield* fileSystem.exists(worktreePath);
-      if (existingPath) {
-        stage = "reconcile-worktree";
-        createdHead = (yield* git.execute({
-          operation: "WorktreeWorkspaceReactor.reconcileHead",
-          cwd: worktreePath,
-          args: ["rev-parse", "HEAD"],
-        })).stdout.trim();
-        createdBranch = (yield* git.execute({
-          operation: "WorktreeWorkspaceReactor.reconcileBranch",
-          cwd: worktreePath,
-          args: ["branch", "--show-current"],
-        })).stdout.trim();
-        if (!createdHead || !createdBranch) {
-          return yield* Effect.fail(new Error("Existing worktree has no branch or HEAD commit"));
-        }
-        createdPath = worktreePath;
-        createdFromCommit = createdHead;
-      } else {
-        stage = "resolve-source";
-        if (sourceRef === workspace.targetRef) {
-          createdFromCommit = targetResolvedCommit;
-        } else {
-          createdFromCommit = (yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.resolveSource",
-            cwd: project.workspaceRoot,
-            args: ["rev-parse", "--verify", `${sourceRef}^{commit}`],
-          })).stdout.trim();
-        }
-        if (!createdFromCommit) {
-          return yield* Effect.fail(new Error(`Source '${sourceRef}' has no commit`));
+      if (workspace.sourceKind === "pull-request") {
+        const pullRequestReference = workspace.lastKnownPr?.url ?? workspace.sourceRef;
+        if (!pullRequestReference || workspace.lastKnownPr === null) {
+          return yield* Effect.fail(
+            new Error("Pull-request workspace is missing its durable pull request identity"),
+          );
         }
 
-        stage = "create-worktree";
+        stage = "prepare-pull-request";
         yield* fileSystem.makeDirectory(path.dirname(worktreePath), { recursive: true });
-        let localBranchExists = false;
-        let remotes: readonly string[] = [];
-        if (workspace.sourceKind === "branch") {
-          const localBranch = yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.resolveLocalBranch",
-            cwd: project.workspaceRoot,
-            args: ["show-ref", "--verify", "--quiet", `refs/heads/${sourceRef}`],
-            allowNonZeroExit: true,
-          });
-          localBranchExists = localBranch.code === 0;
-          if (!localBranchExists) {
-            remotes = (yield* git.execute({
-              operation: "WorktreeWorkspaceReactor.listRemotes",
-              cwd: project.workspaceRoot,
-              args: ["remote"],
-            })).stdout
-              .split("\n")
-              .map((remote) => remote.trim())
-              .filter(Boolean);
-          }
-        }
-        const { branch, newBranch } = resolveWorkspaceBranchProvisioning({
-          sourceKind: workspace.sourceKind,
-          sourceRef,
-          sourceCommit: createdFromCommit,
-          generatedBranch,
-          localBranchExists,
-          remotes,
-        });
-        const result = yield* git.createWorktree({
+        const prepared = yield* gitManager.preparePullRequestThread({
           cwd: project.workspaceRoot,
-          branch,
-          newBranch,
-          path: worktreePath,
+          reference: pullRequestReference,
+          mode: "worktree",
+          managedWorktreePath: worktreePath,
+          ...(project.githubAccount ? { account: project.githubAccount } : {}),
         });
-        createdPath = result.worktree.path;
-        createdBranch = result.worktree.branch;
+        refreshedPullRequest = prepared.pullRequest;
+        createdPath = prepared.worktreePath;
+        createdBranch = prepared.branch;
+        if (!createdPath) {
+          return yield* Effect.fail(
+            new Error("Pull request preparation did not return a managed worktree path"),
+          );
+        }
         createdHead = (yield* git.execute({
-          operation: "WorktreeWorkspaceReactor.readHead",
+          operation: "WorktreeWorkspaceReactor.readPullRequestHead",
           cwd: createdPath,
           args: ["rev-parse", "HEAD"],
         })).stdout.trim();
+        createdFromCommit = createdHead;
+
+        stage = "resolve-target";
+        const targetCandidates = [
+          prepared.pullRequest.baseBranch,
+          `origin/${prepared.pullRequest.baseBranch}`,
+        ];
+        for (const candidate of targetCandidates) {
+          const resolved = yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.resolvePullRequestTarget",
+            cwd: project.workspaceRoot,
+            args: ["rev-parse", "--verify", `${candidate}^{commit}`],
+            allowNonZeroExit: true,
+          });
+          if (resolved.code === 0 && resolved.stdout.trim()) {
+            targetResolvedCommit = resolved.stdout.trim();
+            break;
+          }
+        }
+        if (!targetResolvedCommit) {
+          return yield* Effect.fail(
+            new Error(`Target '${prepared.pullRequest.baseBranch}' has no local commit`),
+          );
+        }
+      } else {
+        stage = "resolve-target";
+        targetResolvedCommit = (yield* git.execute({
+          operation: "WorktreeWorkspaceReactor.resolveTarget",
+          cwd: project.workspaceRoot,
+          args: ["rev-parse", "--verify", `${workspace.targetRef}^{commit}`],
+        })).stdout.trim();
+        if (!targetResolvedCommit) {
+          return yield* Effect.fail(new Error(`Target '${workspace.targetRef}' has no commit`));
+        }
+
+        const existingPath = yield* fileSystem.exists(worktreePath);
+        if (existingPath) {
+          stage = "reconcile-worktree";
+          createdHead = (yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.reconcileHead",
+            cwd: worktreePath,
+            args: ["rev-parse", "HEAD"],
+          })).stdout.trim();
+          createdBranch = (yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.reconcileBranch",
+            cwd: worktreePath,
+            args: ["branch", "--show-current"],
+          })).stdout.trim();
+          if (!createdHead || !createdBranch) {
+            return yield* Effect.fail(new Error("Existing worktree has no branch or HEAD commit"));
+          }
+          createdPath = worktreePath;
+          createdFromCommit = createdHead;
+        } else {
+          stage = "resolve-source";
+          if (sourceRef === workspace.targetRef) {
+            createdFromCommit = targetResolvedCommit;
+          } else {
+            createdFromCommit = (yield* git.execute({
+              operation: "WorktreeWorkspaceReactor.resolveSource",
+              cwd: project.workspaceRoot,
+              args: ["rev-parse", "--verify", `${sourceRef}^{commit}`],
+            })).stdout.trim();
+          }
+          if (!createdFromCommit) {
+            return yield* Effect.fail(new Error(`Source '${sourceRef}' has no commit`));
+          }
+
+          stage = "create-worktree";
+          yield* fileSystem.makeDirectory(path.dirname(worktreePath), { recursive: true });
+          let localBranchExists = false;
+          let remotes: readonly string[] = [];
+          if (workspace.sourceKind === "branch") {
+            const localBranch = yield* git.execute({
+              operation: "WorktreeWorkspaceReactor.resolveLocalBranch",
+              cwd: project.workspaceRoot,
+              args: ["show-ref", "--verify", "--quiet", `refs/heads/${sourceRef}`],
+              allowNonZeroExit: true,
+            });
+            localBranchExists = localBranch.code === 0;
+            if (!localBranchExists) {
+              remotes = (yield* git.execute({
+                operation: "WorktreeWorkspaceReactor.listRemotes",
+                cwd: project.workspaceRoot,
+                args: ["remote"],
+              })).stdout
+                .split("\n")
+                .map((remote) => remote.trim())
+                .filter(Boolean);
+            }
+          }
+          const { branch, newBranch } = resolveWorkspaceBranchProvisioning({
+            sourceKind: workspace.sourceKind,
+            sourceRef,
+            sourceCommit: createdFromCommit,
+            generatedBranch,
+            localBranchExists,
+            remotes,
+          });
+          const result = yield* git.createWorktree({
+            cwd: project.workspaceRoot,
+            branch,
+            newBranch,
+            path: worktreePath,
+          });
+          createdPath = result.worktree.path;
+          createdBranch = result.worktree.branch;
+          createdHead = (yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.readHead",
+            cwd: createdPath,
+            args: ["rev-parse", "HEAD"],
+          })).stdout.trim();
+        }
       }
 
       if (
@@ -396,6 +455,12 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         headRef: createdHead,
         targetResolvedCommit,
         createdFromCommit,
+        ...(refreshedPullRequest
+          ? {
+              targetRef: refreshedPullRequest.baseBranch,
+              lastKnownPr: refreshedPullRequest,
+            }
+          : {}),
         setupStatus: setupScripts.length > 0 ? "succeeded" : "skipped",
         completedAt: new Date().toISOString(),
       });

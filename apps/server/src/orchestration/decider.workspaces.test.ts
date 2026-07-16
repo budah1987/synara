@@ -93,6 +93,202 @@ describe("worktree workspace commands", () => {
     });
   });
 
+  it("reserves canonical pull-request identity before provisioning", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const pullRequest = {
+      number: 42,
+      title: "Review workspace lifecycle",
+      url: "https://github.com/Acme/Repo/pull/42",
+      baseBranch: "develop",
+      headBranch: "feature/review-lifecycle",
+      state: "open" as const,
+    };
+    const createPullRequestWorkspace = (suffix: string, url: string) =>
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.create",
+          commandId: CommandId.makeUnsafe(`workspace-pr-create-${suffix}`),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe(`workspace-pr-${suffix}`),
+          threadId: ThreadId.makeUnsafe(`thread-pr-${suffix}`),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          operationId: WorkspaceOperationId.makeUnsafe(`operation-pr-${suffix}`),
+          title: pullRequest.title,
+          targetRef: "stale-caller-base",
+          sourceKind: "pull-request",
+          sourceRef: url,
+          lastKnownPr: { ...pullRequest, url },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      });
+
+    const created = await Effect.runPromise(
+      createPullRequestWorkspace("first", pullRequest.url),
+    );
+    const events = Array.isArray(created) ? created : [created];
+    expect(events[0]?.payload).toMatchObject({
+      sourceKind: "pull-request",
+      sourceRef: pullRequest.url,
+      targetRef: "develop",
+      branch: "feature/review-lifecycle",
+      lastKnownPr: { number: 42, url: pullRequest.url },
+    });
+    expect(events[1]?.payload).toMatchObject({
+      workspaceId: "workspace-pr-first",
+      lastKnownPr: { number: 42, url: pullRequest.url },
+    });
+
+    const activeModel = await apply(initial, events);
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: activeModel,
+          command: {
+            type: "workspace.create",
+            commandId: CommandId.makeUnsafe("workspace-pr-create-duplicate"),
+            workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr-duplicate"),
+            threadId: ThreadId.makeUnsafe("thread-pr-duplicate"),
+            projectId: ProjectId.makeUnsafe("workspace-project"),
+            operationId: WorkspaceOperationId.makeUnsafe("operation-pr-duplicate"),
+            title: pullRequest.title,
+            targetRef: "develop",
+            sourceKind: "pull-request",
+            sourceRef: "https://github.com/acme/repo/pull/42/files",
+            lastKnownPr: {
+              ...pullRequest,
+              url: "https://github.com/acme/repo/pull/42/",
+            },
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow("already attached to workspace 'workspace-pr-first'");
+
+    const archivedModel: OrchestrationReadModel = {
+      ...activeModel,
+      workspaces: activeModel.workspaces?.map((workspace) =>
+        workspace.id === WorktreeWorkspaceId.makeUnsafe("workspace-pr-first")
+          ? { ...workspace, state: "archived" as const, archivedAt: now }
+          : workspace,
+      ),
+    };
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: archivedModel,
+          command: {
+            type: "workspace.create",
+            commandId: CommandId.makeUnsafe("workspace-pr-create-archived-duplicate"),
+            workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr-archived-duplicate"),
+            threadId: ThreadId.makeUnsafe("thread-pr-archived-duplicate"),
+            projectId: ProjectId.makeUnsafe("workspace-project"),
+            operationId: WorkspaceOperationId.makeUnsafe("operation-pr-archived-duplicate"),
+            title: pullRequest.title,
+            targetRef: "develop",
+            sourceKind: "pull-request",
+            sourceRef: "https://github.com/acme/repo/pull/42",
+            lastKnownPr: {
+              ...pullRequest,
+              url: "https://github.com/acme/repo/pull/42",
+            },
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow("belongs to archived workspace 'workspace-pr-first'");
+  });
+
+  it("persists refreshed pull-request refs with provisioning completion", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const created = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.create",
+          commandId: CommandId.makeUnsafe("workspace-pr-refresh-create"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr-refresh"),
+          threadId: ThreadId.makeUnsafe("thread-pr-refresh"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          operationId: WorkspaceOperationId.makeUnsafe("operation-pr-refresh"),
+          title: "Refresh PR",
+          targetRef: "main",
+          sourceKind: "pull-request",
+          sourceRef: "https://github.com/acme/repo/pull/84",
+          lastKnownPr: {
+            number: 84,
+            title: "Refresh PR",
+            url: "https://github.com/acme/repo/pull/84",
+            baseBranch: "main",
+            headBranch: "feature/old-head",
+            state: "open",
+          },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    const readModel = await apply(initial, Array.isArray(created) ? created : [created]);
+    const completed = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.provision.complete",
+          commandId: CommandId.makeUnsafe("workspace-pr-refresh-complete"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-pr-refresh"),
+          operationId: WorkspaceOperationId.makeUnsafe("operation-pr-refresh"),
+          generation: 1,
+          path: "/tmp/workspaces/workspace-pr-refresh",
+          branch: "synara/pr-84/fork-head",
+          headRef: "head123",
+          targetResolvedCommit: "base123",
+          createdFromCommit: "head123",
+          targetRef: "develop",
+          lastKnownPr: {
+            number: 84,
+            title: "Refresh PR",
+            url: "https://github.com/ACME/repo/pull/84/",
+            baseBranch: "develop",
+            headBranch: "fork-head",
+            state: "open",
+          },
+          setupStatus: "skipped",
+          completedAt: now,
+        },
+      }),
+    );
+    const completionEvents = Array.isArray(completed) ? completed : [completed];
+    expect(completionEvents.map((event) => event.type)).toEqual([
+      "workspace.ready",
+      "workspace.meta-updated",
+    ]);
+    const completedModel = await apply(readModel, completionEvents);
+    expect(completedModel.workspaces?.[0]).toMatchObject({
+      state: "ready",
+      path: "/tmp/workspaces/workspace-pr-refresh",
+      branch: "synara/pr-84/fork-head",
+      targetRef: "develop",
+      lastKnownPr: { number: 84, baseBranch: "develop", headBranch: "fork-head" },
+    });
+    expect(completedModel.threads[0]).toMatchObject({
+      branch: "synara/pr-84/fork-head",
+      worktreePath: "/tmp/workspaces/workspace-pr-refresh",
+      lastKnownPr: { number: 84, baseBranch: "develop", headBranch: "fork-head" },
+    });
+  });
+
   it("adds another conversation without emitting a workspace lifecycle event", async () => {
     const now = new Date().toISOString();
     const initial = await repositoryProject(now);

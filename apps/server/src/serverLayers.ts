@@ -77,6 +77,7 @@ export function makeServerRuntimeServicesLayer() {
   const worktreeWorkspaceReactorLayer = WorktreeWorkspaceReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(TerminalLayerLive),
     Layer.provideMerge(devServerManagerLayer),
   );
