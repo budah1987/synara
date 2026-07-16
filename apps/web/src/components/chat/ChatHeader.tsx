@@ -65,6 +65,7 @@ import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import {
   resolveThreadStatusPill,
+  sortThreadsForConversationTabs,
   sortThreadsForSidebar,
   type ThreadStatusPill,
 } from "../Sidebar.logic";
@@ -336,7 +337,6 @@ function EditorRailTabs(props: {
   onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
-  const { settings } = useAppSettings();
   const tabScopeKey = props.workspaceId
     ? `workspace:${props.workspaceId}`
     : `project:${props.projectId}`;
@@ -439,13 +439,12 @@ function EditorRailTabs(props: {
     tabScopeKey,
   ]);
   const chatTabs = useMemo(() => {
-    const sortedProjectThreads = sortThreadsForSidebar(
+    const sortedProjectThreads = sortThreadsForConversationTabs(
       displayThreads.filter((thread) =>
         props.workspaceId
           ? thread.workspaceId === props.workspaceId
           : thread.projectId === props.projectId,
       ),
-      settings.sidebarThreadSortOrder,
     );
     const availableTabs = sortedProjectThreads.map((thread) => ({
       id: thread.id,
@@ -466,7 +465,6 @@ function EditorRailTabs(props: {
     openChatTabs,
     props.projectId,
     props.workspaceId,
-    settings.sidebarThreadSortOrder,
   ]);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);

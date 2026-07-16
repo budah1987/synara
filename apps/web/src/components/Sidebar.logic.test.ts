@@ -49,6 +49,7 @@ import {
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
+  sortThreadsForConversationTabs,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { ProjectId, ThreadId, WorktreeWorkspaceId } from "@synara/contracts";
@@ -1923,6 +1924,39 @@ describe("sortThreadsForSidebar", () => {
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
     ]);
+  });
+});
+
+describe("sortThreadsForConversationTabs", () => {
+  it("keeps tabs in creation order when activity timestamps change", () => {
+    const oldest = makeThread({
+      id: ThreadId.makeUnsafe("thread-1"),
+      createdAt: "2026-03-09T10:00:00.000Z",
+      updatedAt: "2026-03-09T10:10:00.000Z",
+    });
+    const middle = makeThread({
+      id: ThreadId.makeUnsafe("thread-2"),
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+    const newest = makeThread({
+      id: ThreadId.makeUnsafe("thread-3"),
+      createdAt: "2026-03-09T10:06:00.000Z",
+      updatedAt: "2026-03-09T10:06:00.000Z",
+    });
+
+    expect(sortThreadsForConversationTabs([newest, oldest, middle])).toEqual([
+      oldest,
+      middle,
+      newest,
+    ]);
+    expect(
+      sortThreadsForConversationTabs([
+        newest,
+        { ...oldest, updatedAt: "2026-03-09T10:12:00.000Z" },
+        middle,
+      ]).map((thread) => thread.id),
+    ).toEqual([oldest.id, middle.id, newest.id]);
   });
 });
 

@@ -1294,6 +1294,18 @@ export function sortThreadsForSidebar<T extends { id: Thread["id"] } & SidebarTh
   });
 }
 
+export function sortThreadsForConversationTabs<
+  T extends { id: Thread["id"] } & Pick<SidebarThreadSortInput, "createdAt">,
+>(threads: readonly T[]): T[] {
+  return threads.toSorted((left, right) => {
+    const leftTimestamp = toSortableTimestamp(left.createdAt);
+    const rightTimestamp = toSortableTimestamp(right.createdAt);
+    if (leftTimestamp === null) return rightTimestamp === null ? 0 : 1;
+    if (rightTimestamp === null) return -1;
+    return leftTimestamp - rightTimestamp;
+  });
+}
+
 export function getFallbackThreadIdAfterDelete<
   T extends { id: Thread["id"]; projectId: Thread["projectId"] } & SidebarThreadSortInput,
 >(input: {
