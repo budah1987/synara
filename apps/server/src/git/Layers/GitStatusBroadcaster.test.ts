@@ -181,6 +181,43 @@ describe("GitStatusBroadcasterLive", () => {
     );
   });
 
+  it("keeps partial status usable without repeating the full status lookup", async () => {
+    const partialWorkingTree = {
+      files: [{ path: "src/first.ts", insertions: 0, deletions: 0 }],
+      insertions: 0,
+      deletions: 0,
+      totalFiles: 4_542,
+      isPartial: true,
+      truncated: true,
+      statisticsState: "partial" as const,
+    };
+    const state: TestState = {
+      currentDetails: { ...baseDetails, hasWorkingTreeChanges: true, workingTree: partialWorkingTree },
+      currentStatus: {
+        ...baseStatus,
+        hasWorkingTreeChanges: true,
+        workingTree: partialWorkingTree,
+      },
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+
+        const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        const second = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        expect(first.workingTree).toEqual(partialWorkingTree);
+        expect(second.workingTree).toEqual(partialWorkingTree);
+        expect(state.statusCalls).toBe(1);
+        expect(state.detailsCalls).toBe(1);
+      }),
+    );
+  });
+
   it("refreshes local git status on repeated reads without repeating PR lookup", async () => {
     const state = {
       currentDetails: baseDetails,
@@ -399,6 +436,66 @@ describe("GitStatusBroadcasterLive", () => {
             workingTree: baseStatus.workingTree,
           },
         });
+      }),
+    );
+  });
+
+  it("refreshes every account-keyed subscriber after a cwd mutation", async () => {
+    const state: TestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      statusInputs: [],
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const firstSnapshot = yield* Deferred.make<GitStatusStreamEvent>();
+        const secondSnapshot = yield* Deferred.make<GitStatusStreamEvent>();
+        const firstUpdate = yield* Deferred.make<GitStatusStreamEvent>();
+        const secondUpdate = yield* Deferred.make<GitStatusStreamEvent>();
+
+        const streamAccount = (
+          login: string,
+          snapshot: Deferred.Deferred<GitStatusStreamEvent>,
+          update: Deferred.Deferred<GitStatusStreamEvent>,
+        ) =>
+          Stream.runForEach(
+            broadcaster.streamStatus({
+              cwd: "/repo",
+              account: { host: "github.com", login },
+            }),
+            (event) => {
+              if (event._tag === "snapshot") {
+                return Deferred.succeed(snapshot, event).pipe(Effect.ignore);
+              }
+              if (event._tag === "localUpdated") {
+                return Deferred.succeed(update, event).pipe(Effect.ignore);
+              }
+              return Effect.void;
+            },
+          ).pipe(Effect.forkScoped);
+
+        yield* streamAccount("octo-one", firstSnapshot, firstUpdate);
+        yield* streamAccount("octo-two", secondSnapshot, secondUpdate);
+        yield* Deferred.await(firstSnapshot);
+        yield* Deferred.await(secondSnapshot);
+
+        state.currentStatus = { ...baseStatus, branch: "feature/account-refresh" };
+        yield* broadcaster.refreshStatus("/repo");
+
+        expect((yield* Deferred.await(firstUpdate))._tag).toBe("localUpdated");
+        expect((yield* Deferred.await(secondUpdate))._tag).toBe("localUpdated");
+        expect(state.statusInputs?.map((input) => input.account?.login ?? null)).toEqual([
+          "octo-one",
+          "octo-two",
+          null,
+          "octo-one",
+          "octo-two",
+        ]);
       }),
     );
   });

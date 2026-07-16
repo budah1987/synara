@@ -1,5 +1,6 @@
 import type {
   GitBranch,
+  GitHubAccountSelection,
   GitPullRequestListFilter,
   GitPullRequestListItem,
 } from "@synara/contracts";
@@ -47,6 +48,7 @@ interface WorktreeWorkspaceCreateDialogProps {
   open: boolean;
   projectName: string;
   projectCwd: string;
+  githubAccount?: GitHubAccountSelection;
   defaultTargetRef: string | null;
   onOpenChange: (open: boolean) => void;
   onCreate: (input: { title: string; source: WorkspaceCreateSource }) => Promise<void>;
@@ -169,6 +171,7 @@ export function WorktreeWorkspaceCreateDialog({
   open,
   projectName,
   projectCwd,
+  githubAccount,
   defaultTargetRef,
   onOpenChange,
   onCreate,
@@ -255,7 +258,11 @@ export function WorktreeWorkspaceCreateDialog({
     setPullRequestListError(null);
     setIsLoadingPullRequests(true);
     void api.git
-      .listPullRequests({ cwd: projectCwd, filter: pullRequestFilter })
+      .listPullRequests({
+        cwd: projectCwd,
+        filter: pullRequestFilter,
+        ...(githubAccount ? { account: githubAccount } : {}),
+      })
       .then((result) => {
         if (!cancelled) setPullRequests([...result.pullRequests]);
       })
@@ -273,7 +280,7 @@ export function WorktreeWorkspaceCreateDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, projectCwd, pullRequestFilter, sourceKind]);
+  }, [githubAccount, open, projectCwd, pullRequestFilter, sourceKind]);
 
   useEffect(() => {
     if (!open) return;

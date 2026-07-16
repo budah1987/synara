@@ -137,7 +137,6 @@ import {
   isThreadRunningTurn,
 } from "../session-logic";
 import {
-  gitGithubRepositoryQueryOptions,
   gitRemoveWorktreeMutationOptions,
   gitResolvePullRequestQueryOptions,
   gitStatusQueryOptions,
@@ -222,6 +221,7 @@ import {
 } from "./WorktreeWorkspaceCreateDialog";
 import {
   branchNameFromWorkspaceTitle,
+  type BranchRenameAvailability,
   WorktreeWorkspaceRenameDialog,
 } from "./WorktreeWorkspaceRenameDialog";
 import { terminalRuntimeRegistry } from "./terminal/terminalRuntimeRegistry";
@@ -304,7 +304,6 @@ import {
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import {
-  buildGitHubBranchUrl,
   describeAddProjectError,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
@@ -2000,35 +1999,92 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
   );
-  const workspaceRepositoryTargets = useMemo(() => {
+  const workspaceGitTargets = useMemo(() => {
     if (workspaceProtocolVersion !== 2) {
       return [];
     }
-    const workspaceProjectIds = new Set(
-      worktreeWorkspaces
-        .filter((workspace) => workspace.deletedAt === null)
-        .map((workspace) => workspace.projectId),
-    );
-    return projects
-      .filter((project) => workspaceProjectIds.has(project.id))
-      .map((project) => ({ projectId: project.id, cwd: project.cwd }));
-  }, [projects, workspaceProtocolVersion, worktreeWorkspaces]);
-  const workspaceRepositoryQueries = useQueries({
-    queries: workspaceRepositoryTargets.map((target) =>
-      gitGithubRepositoryQueryOptions(target.cwd),
-    ),
+    return worktreeWorkspaces.flatMap((workspace) => {
+      if (workspace.deletedAt !== null || !workspace.path || !workspace.branch) {
+        return [];
+      }
+      return [
+        {
+          workspaceId: workspace.id,
+          branch: workspace.branch,
+          cwd: workspace.path,
+          githubAccount: projectById.get(workspace.projectId)?.githubAccount ?? undefined,
+        },
+      ];
+    });
+  }, [projectById, workspaceProtocolVersion, worktreeWorkspaces]);
+  const workspaceGitQueries = useQueries({
+    queries: workspaceGitTargets.map((target) => ({
+      ...gitStatusQueryOptions(target.cwd, target.githubAccount),
+      staleTime: 30_000,
+      refetchInterval: 60_000,
+    })),
   });
-  const githubRepositoryUrlByProjectId = useMemo(() => {
-    const urls = new Map<ProjectId, string>();
-    for (let index = 0; index < workspaceRepositoryTargets.length; index += 1) {
-      const target = workspaceRepositoryTargets[index];
-      const repositoryUrl = workspaceRepositoryQueries[index]?.data?.repository?.url;
-      if (target && repositoryUrl) {
-        urls.set(target.projectId, repositoryUrl);
+  const workspaceGitQueryIndexById = useMemo(
+    () =>
+      new Map(
+        workspaceGitTargets.map((target, index) => [target.workspaceId, index] as const),
+      ),
+    [workspaceGitTargets],
+  );
+  const workspaceBranchUrlById = useMemo(() => {
+    const urls = new Map<WorktreeWorkspaceId, string>();
+    for (let index = 0; index < workspaceGitTargets.length; index += 1) {
+      const target = workspaceGitTargets[index];
+      const status = workspaceGitQueries[index]?.data;
+      if (
+        target &&
+        status?.branch === target.branch &&
+        status.publication?.state === "published"
+      ) {
+        urls.set(target.workspaceId, status.publication.url);
       }
     }
     return urls;
-  }, [workspaceRepositoryQueries, workspaceRepositoryTargets]);
+  }, [workspaceGitQueries, workspaceGitTargets]);
+  const renamingWorkspaceGitQueryIndex = renamingWorktreeWorkspace
+    ? workspaceGitQueryIndexById.get(renamingWorktreeWorkspace.id)
+    : undefined;
+  const renamingWorkspaceGitQuery =
+    renamingWorkspaceGitQueryIndex === undefined
+      ? undefined
+      : workspaceGitQueries[renamingWorkspaceGitQueryIndex];
+  const branchRenameAvailability: BranchRenameAvailability = (() => {
+    if (
+      !renamingWorktreeWorkspace ||
+      renamingWorktreeWorkspace.state !== "ready" ||
+      !renamingWorktreeWorkspace.path ||
+      !renamingWorktreeWorkspace.branch
+    ) {
+      return "not-ready";
+    }
+    if (renamingWorkspaceGitQuery?.isPending) {
+      return "checking";
+    }
+    if (renamingWorkspaceGitQuery?.isError) {
+      return "unverified";
+    }
+    const status = renamingWorkspaceGitQuery?.data;
+    if (
+      !status ||
+      status.branch !== renamingWorktreeWorkspace.branch ||
+      !status.publication
+    ) {
+      return "unavailable";
+    }
+    if (
+      renamingWorktreeWorkspace.lastKnownPr ||
+      status.pr ||
+      status.publication.state !== "local_only"
+    ) {
+      return "protected";
+    }
+    return "available";
+  })();
   const openWorkspaceBranchLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, branchUrl: string) => {
       event.preventDefault();
@@ -2741,7 +2797,10 @@ export default function Sidebar() {
   );
 
   const addProjectFromPath = useCallback(
-    async (rawCwd: string, options: { createIfMissing?: boolean } = {}) => {
+    async (
+      rawCwd: string,
+      options: { createIfMissing?: boolean; githubAccount?: GitHubAccountSelection } = {},
+    ) => {
       const cwd = rawCwd.trim();
       if (!cwd || isAddingProject) return;
       const api = readNativeApi();
@@ -2757,13 +2816,17 @@ export default function Sidebar() {
 
       try {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
-        const existingRecovery = await recoverExistingAddProjectTarget({
-          existingProjectId: existing?.id,
-          workspaceRoot: cwd,
-          recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
-          recoverByWorkspaceRoot: (workspaceRoot) =>
-            recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
-        });
+        const existingRecovery =
+          options.githubAccount === undefined
+            ? await recoverExistingAddProjectTarget({
+                existingProjectId: existing?.id,
+                workspaceRoot: cwd,
+                recoverByProjectId: (projectId) =>
+                  recoverExistingProjectFromServer(api, projectId),
+                recoverByWorkspaceRoot: (workspaceRoot) =>
+                  recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
+              })
+            : null;
         if (existingRecovery === "recovered") {
           finishAddingProject();
           return;
@@ -2779,6 +2842,7 @@ export default function Sidebar() {
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
+          ...(options.githubAccount ? { githubAccount: options.githubAccount } : {}),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2861,7 +2925,7 @@ export default function Sidebar() {
       const api = readNativeApi();
       if (!api) throw new Error("Synara is not connected to the local server.");
       const cloned = await api.git.cloneRepository({ repository, account });
-      await addProjectFromPath(cloned.path);
+      await addProjectFromPath(cloned.path, { githubAccount: account });
     },
     [addProjectFromPath],
   );
@@ -3013,6 +3077,7 @@ export default function Sidebar() {
           cwd: project.cwd,
           reference: input.source.reference,
           mode: "worktree",
+          ...(project.githubAccount ? { account: project.githubAccount } : {}),
         });
         if (!prepared.worktreePath) {
           throw new Error("The pull request did not produce a dedicated worktree.");
@@ -5309,28 +5374,33 @@ export default function Sidebar() {
         threadId: thread.id,
         branch: thread.branch,
         lastKnownPr: thread.lastKnownPr ?? null,
+        githubAccount: projectById.get(thread.projectId)?.githubAccount ?? undefined,
         cwd: resolveThreadWorkspaceCwd({
           projectCwd: projectCwdById.get(thread.projectId) ?? null,
           envMode: thread.envMode,
           worktreePath: thread.worktreePath,
         }),
       })),
-    [projectCwdById, visibleSidebarThreads],
+    [projectById, projectCwdById, visibleSidebarThreads],
   );
-  const threadGitStatusCwds = useMemo(
-    () => [
-      ...new Set(
-        threadGitTargets
-          .filter((target) => target.branch !== null)
-          .map((target) => target.cwd)
-          .filter((cwd): cwd is string => cwd !== null),
-      ),
-    ],
-    [threadGitTargets],
-  );
+  const threadGitStatusTargets = useMemo(() => {
+    const targetsByCwd = new Map<
+      string,
+      { cwd: string; githubAccount: GitHubAccountSelection | undefined }
+    >();
+    for (const target of threadGitTargets) {
+      if (target.branch !== null && target.cwd !== null && !targetsByCwd.has(target.cwd)) {
+        targetsByCwd.set(target.cwd, {
+          cwd: target.cwd,
+          githubAccount: target.githubAccount,
+        });
+      }
+    }
+    return [...targetsByCwd.values()];
+  }, [threadGitTargets]);
   const threadGitStatusQueries = useQueries({
-    queries: threadGitStatusCwds.map((cwd) => ({
-      ...gitStatusQueryOptions(cwd),
+    queries: threadGitStatusTargets.map((target) => ({
+      ...gitStatusQueryOptions(target.cwd, target.githubAccount),
       staleTime: 30_000,
       refetchInterval: 60_000,
     })),
@@ -5351,6 +5421,7 @@ export default function Sidebar() {
       ...gitResolvePullRequestQueryOptions({
         cwd: target.cwd,
         reference: target.lastKnownPr.url,
+        ...(target.githubAccount ? { account: target.githubAccount } : {}),
       }),
       staleTime: 30_000,
       refetchInterval: 60_000,
@@ -5358,12 +5429,12 @@ export default function Sidebar() {
   });
   const prByThreadId = useMemo(() => {
     const statusByCwd = new Map<string, GitStatusResult>();
-    for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
-      const cwd = threadGitStatusCwds[index];
-      if (!cwd) continue;
+    for (let index = 0; index < threadGitStatusTargets.length; index += 1) {
+      const target = threadGitStatusTargets[index];
+      if (!target) continue;
       const status = threadGitStatusQueries[index]?.data;
       if (status) {
-        statusByCwd.set(cwd, status);
+        statusByCwd.set(target.cwd, status);
       }
     }
 
@@ -5391,8 +5462,8 @@ export default function Sidebar() {
     }
     return map;
   }, [
-    threadGitStatusCwds,
     threadGitStatusQueries,
+    threadGitStatusTargets,
     threadGitTargets,
     threadStoredPrQueries,
     threadStoredPrTargets,
@@ -6421,10 +6492,7 @@ export default function Sidebar() {
                         ? (visibleThreadJumpLabelPartsByThreadId.get(workspaceShortcutThreadId) ??
                           EMPTY_SHORTCUT_PARTS)
                         : EMPTY_SHORTCUT_PARTS;
-                      const branchUrl = buildGitHubBranchUrl(
-                        githubRepositoryUrlByProjectId.get(workspace.projectId),
-                        workspace.branch,
-                      );
+                      const branchUrl = workspaceBranchUrlById.get(workspace.id) ?? null;
                       return (
                         <SidebarMenuSubItem key={workspace.id} className="w-full">
                           <div
@@ -6504,6 +6572,14 @@ export default function Sidebar() {
                                   title={workspace.title}
                                   branch={workspace.branch}
                                   branchUrl={branchUrl}
+                                  {...(workspace.branch
+                                    ? {
+                                        branchPresentation: {
+                                          name: workspace.branch,
+                                          verifiedUrl: branchUrl,
+                                        },
+                                      }
+                                    : {})}
                                   path={
                                     workspace.path
                                       ? formatWorktreePathForDisplay(workspace.path)
@@ -8234,6 +8310,9 @@ export default function Sidebar() {
           workspaceCreateProject?.localName ?? workspaceCreateProject?.name ?? "this project"
         }
         projectCwd={workspaceCreateProject?.cwd ?? ""}
+        {...(workspaceCreateProject?.githubAccount
+          ? { githubAccount: workspaceCreateProject.githubAccount }
+          : {})}
         defaultTargetRef={workspaceCreateProject?.defaultTargetRef ?? null}
         onOpenChange={(open) => {
           if (!open) setWorkspaceCreateProjectId(null);
@@ -8247,6 +8326,7 @@ export default function Sidebar() {
       <WorktreeWorkspaceRenameDialog
         open={renamingWorktreeWorkspace !== null}
         workspace={renamingWorktreeWorkspace}
+        branchRenameAvailability={branchRenameAvailability}
         onOpenChange={(open) => {
           if (!open) setRenamingWorktreeWorkspaceId(null);
         }}

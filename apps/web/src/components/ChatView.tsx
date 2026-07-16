@@ -4470,7 +4470,11 @@ export default function ChatView({
     environmentPanelOpen,
   });
   const githubRepositoryQuery = useQuery(
-    gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
+    gitGithubRepositoryQueryOptions(
+      gitBranchSourceCwd,
+      environmentPanelVisible,
+      activeProject?.githubAccount ?? undefined,
+    ),
   );
   const threadRecap = useThreadRecap({
     thread: activeThread,
@@ -11511,6 +11515,9 @@ export default function ChatView({
                 key={pullRequestDialogState.key}
                 open
                 cwd={activeProject?.cwd ?? null}
+                {...(activeProject?.githubAccount
+                  ? { githubAccount: activeProject.githubAccount }
+                  : {})}
                 initialReference={pullRequestDialogState.initialReference}
                 onOpenChange={(open) => {
                   if (!open) {

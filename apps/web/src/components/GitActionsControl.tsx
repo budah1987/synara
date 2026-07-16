@@ -3,14 +3,16 @@
 // Layer: Header action control
 // Depends on: git React Query hooks, native shell bridges, and shared picker/menu primitives.
 
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
+import { DEFAULT_GIT_TEXT_GENERATION_MODEL, WorktreeWorkspaceId } from "@synara/contracts";
 import type {
   GitActionProgressEvent,
   GitStackedAction,
   GitStatusResult,
   ModelSelection,
+  OrchestrationThreadPullRequest,
   ThreadId,
 } from "@synara/contracts";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -97,6 +99,13 @@ import {
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
+import {
+  persistPullRequestAssociation,
+  pullRequestAssociationKey,
+  pullRequestAssociationsEqual,
+  resolvePullRequestAssociation,
+} from "~/lib/gitPullRequestAssociation";
+import { useRightDockStore } from "~/rightDockStore";
 import { createThreadGitHubAccountSelector, createThreadSelector } from "~/storeSelectors";
 import { useStore } from "~/store";
 
@@ -337,6 +346,7 @@ export default function GitActionsControl({
         ) ?? null)
       : null,
   );
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(
     () => (activeThreadId ? { threadId: activeThreadId } : undefined),
@@ -392,19 +402,24 @@ export default function GitActionsControl({
   }, [isGitStatusOutOfSync, queryClient]);
 
   const persistedPr = activeWorkspace?.lastKnownPr ?? activeThread?.lastKnownPr ?? null;
-  const persistedStatusPr = persistedPr
+  const visiblePr = resolvePullRequestAssociation({
+    live: gitStatus?.pr ?? null,
+    persisted: persistedPr,
+    liveUnavailable: gitStatus === null || gitStatusError !== null,
+  });
+  const visibleStatusPr = visiblePr
     ? {
-        ...persistedPr,
-        isDraft: persistedPr.isDraft ?? false,
-        mergeability: persistedPr.mergeability ?? ("unknown" as const),
-        additions: persistedPr.additions ?? null,
-        deletions: persistedPr.deletions ?? null,
-        changedFiles: persistedPr.changedFiles ?? null,
+        ...visiblePr,
+        isDraft: visiblePr.isDraft ?? false,
+        mergeability: visiblePr.mergeability ?? ("unknown" as const),
+        additions: visiblePr.additions ?? null,
+        deletions: visiblePr.deletions ?? null,
+        changedFiles: visiblePr.changedFiles ?? null,
       }
     : null;
   const gitStatusWithPersistedPr =
-    gitStatus && gitStatusError && gitStatus.pr === null && persistedStatusPr
-      ? { ...gitStatus, pr: persistedStatusPr }
+    gitStatus && gitStatus.pr === null && visibleStatusPr
+      ? { ...gitStatus, pr: visibleStatusPr }
       : gitStatus;
   const gitStatusForActions = isGitStatusOutOfSync ? null : gitStatusWithPersistedPr;
 
@@ -432,46 +447,64 @@ export default function GitActionsControl({
     }),
   );
   const pullMutation = useMutation(gitPullMutationOptions({ cwd: gitCwd, queryClient }));
-  const persistThreadPr = useCallback(
-    async (pr: {
-      number: number;
-      title: string;
-      url: string;
-      baseBranch: string;
-      headBranch: string;
-      state: "open" | "closed" | "merged";
-      isDraft?: boolean;
-      mergeability?: "mergeable" | "conflicting" | "unknown";
-      additions?: number | null;
-      deletions?: number | null;
-      changedFiles?: number | null;
-    }) => {
+  const lastPersistedPullRequestRef = useRef<string | null>(null);
+  const persistActivePullRequest = useCallback(
+    async (pullRequest: OrchestrationThreadPullRequest) => {
       if (!activeThreadId) {
         return;
       }
       const api = readNativeApi();
       if (!api) {
-        return;
+        throw new Error("Pull request persistence is unavailable.");
       }
-      if (activeThread?.workspaceId) {
-        await api.orchestration.dispatchCommand({
-          type: "workspace.meta.update",
-          commandId: newCommandId(),
-          workspaceId: activeThread.workspaceId,
-          lastKnownPr: pr,
-          updatedAt: new Date().toISOString(),
-        });
-      } else {
-        await api.orchestration.dispatchCommand({
-          type: "thread.meta.update",
-          commandId: newCommandId(),
-          threadId: activeThreadId,
-          lastKnownPr: pr,
-        });
-      }
+      const workspaceId = activeThread?.workspaceId
+        ? WorktreeWorkspaceId.makeUnsafe(activeThread.workspaceId)
+        : null;
+      await persistPullRequestAssociation({
+        api,
+        threadId: activeThreadId,
+        workspaceId,
+        pullRequest,
+      });
+      lastPersistedPullRequestRef.current = `${workspaceId ?? activeThreadId}:${pullRequestAssociationKey(
+        pullRequest,
+      )}`;
     },
     [activeThread?.workspaceId, activeThreadId],
   );
+  const reportPullRequestPersistenceFailure = useCallback(
+    (error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Pull request association wasn't saved",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Synara couldn't attach this pull request to the workspace.",
+        data: threadToastData,
+      });
+    },
+    [threadToastData],
+  );
+
+  useEffect(() => {
+    const livePr = gitStatus?.pr ?? null;
+    if (!livePr || pullRequestAssociationsEqual(livePr, persistedPr)) {
+      return;
+    }
+    const targetId = activeThread?.workspaceId ?? activeThreadId;
+    if (!targetId) return;
+    const persistenceKey = `${targetId}:${pullRequestAssociationKey(livePr)}`;
+    if (lastPersistedPullRequestRef.current === persistenceKey) return;
+    void persistActivePullRequest(livePr).catch(reportPullRequestPersistenceFailure);
+  }, [
+    activeThread?.workspaceId,
+    activeThreadId,
+    gitStatus?.pr,
+    persistActivePullRequest,
+    persistedPr,
+    reportPullRequestPersistenceFailure,
+  ]);
 
   const isRunStackedActionRunning =
     useIsMutating({ mutationKey: gitMutationKeys.runStackedAction(gitCwd, githubAccount) }) > 0;
@@ -518,25 +551,27 @@ export default function GitActionsControl({
     [activeThread?.associatedWorktreeBranch, activeThread?.title, existingBranchNames],
   );
 
-  const quickAction = useMemo(
-    () =>
-      resolveQuickAction(
-        gitStatusForActions,
-        isGitActionRunning,
-        isDefaultBranch,
-        hasOriginRemote,
-        shouldOfferCreateBranch,
-        defaultBranchName,
-      ),
-    [
-      defaultBranchName,
+  const quickAction = useMemo(() => {
+    if (!gitStatusForActions && !isGitActionRunning && visibleStatusPr?.state === "open") {
+      return { label: "View PR", disabled: false, kind: "open_pr" as const };
+    }
+    return resolveQuickAction(
       gitStatusForActions,
-      hasOriginRemote,
-      isDefaultBranch,
       isGitActionRunning,
+      isDefaultBranch,
+      hasOriginRemote,
       shouldOfferCreateBranch,
-    ],
-  );
+      defaultBranchName,
+    );
+  }, [
+    defaultBranchName,
+    gitStatusForActions,
+    hasOriginRemote,
+    isDefaultBranch,
+    isGitActionRunning,
+    shouldOfferCreateBranch,
+    visibleStatusPr?.state,
+  ]);
   const gitActionMenuItems = useMemo(
     () =>
       buildMenuItems(
@@ -639,18 +674,44 @@ export default function GitActionsControl({
     };
   }, [updateActiveProgressToast]);
 
-  const openExistingPr = useCallback(async () => {
-    const api = readNativeApi();
-    if (!api) {
-      toastManager.add({
-        type: "error",
-        title: "Link opening is unavailable.",
-        data: threadToastData,
+  const openPullRequest = useCallback(
+    (pullRequest: { number: number; url: string }) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pullRequest.url);
+      if (activeThreadId && activeThread?.projectId && repository) {
+        openRightDockPane(activeThreadId, {
+          kind: "pullRequest",
+          pullRequestProjectId: activeThread.projectId,
+          pullRequestRepository: repository,
+          pullRequestNumber: pullRequest.number,
+          pullRequestInitialTab: "summary",
+        });
+        return;
+      }
+
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Link opening is unavailable.",
+          data: threadToastData,
+        });
+        return;
+      }
+      void api.shell.openExternal(pullRequest.url).catch((error) => {
+        toastManager.add({
+          type: "error",
+          title: "Unable to open PR link",
+          description: error instanceof Error ? error.message : "An error occurred.",
+          data: threadToastData,
+        });
       });
-      return;
-    }
-    const prUrl = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr.url : null;
-    if (!prUrl) {
+    },
+    [activeThread?.projectId, activeThreadId, openRightDockPane, threadToastData],
+  );
+
+  const openExistingPr = useCallback(() => {
+    const pullRequest = visibleStatusPr?.state === "open" ? visibleStatusPr : null;
+    if (!pullRequest) {
       toastManager.add({
         type: "error",
         title: "No open PR found.",
@@ -658,15 +719,8 @@ export default function GitActionsControl({
       });
       return;
     }
-    void api.shell.openExternal(prUrl).catch((err) => {
-      toastManager.add({
-        type: "error",
-        title: "Unable to open PR link",
-        description: err instanceof Error ? err.message : "An error occurred.",
-        data: threadToastData,
-      });
-    });
-  }, [gitStatusForActions, threadToastData]);
+    openPullRequest(pullRequest);
+  }, [openPullRequest, threadToastData, visibleStatusPr]);
 
   const runSyncWithRemote = useCallback(() => {
     const promise = pullMutation.mutateAsync();
@@ -801,7 +855,7 @@ export default function GitActionsControl({
         const result = await promise;
         activeGitActionProgressRef.current = null;
         const resultToast = summarizeGitResult(result);
-        const persistedPr =
+        const pullRequestToPersist: OrchestrationThreadPullRequest | null =
           result.pr.status === "created" || result.pr.status === "opened_existing"
             ? result.pr.number &&
               result.pr.title &&
@@ -820,13 +874,18 @@ export default function GitActionsControl({
             : actionStatus?.pr?.state === "open"
               ? actionStatus.pr
               : null;
-        if (persistedPr) {
-          void persistThreadPr(persistedPr).catch(() => undefined);
+        if (pullRequestToPersist) {
+          try {
+            await persistActivePullRequest(pullRequestToPersist);
+          } catch (error) {
+            reportPullRequestPersistenceFailure(error);
+          }
         }
 
         const existingOpenPrUrl =
           actionStatus?.pr?.state === "open" ? actionStatus.pr.url : undefined;
         const prUrl = result.pr.url ?? existingOpenPrUrl;
+        const prNumber = result.pr.number ?? actionStatus?.pr?.number ?? null;
         const shouldOfferPushCta = action === "commit" && result.commit.status === "created";
         const shouldOfferOpenPrCta =
           (action === "push" ||
@@ -890,10 +949,10 @@ export default function GitActionsControl({
                   actionProps: {
                     children: "View PR",
                     onClick: () => {
-                      const api = readNativeApi();
-                      if (!api) return;
                       closeResultToast();
-                      void api.shell.openExternal(prUrl);
+                      if (prNumber) {
+                        openPullRequest({ number: prNumber, url: prUrl });
+                      }
                     },
                   },
                 }
@@ -928,7 +987,9 @@ export default function GitActionsControl({
       gitStatusForActions,
       hasOriginRemote,
       isDefaultBranch,
-      persistThreadPr,
+      openPullRequest,
+      persistActivePullRequest,
+      reportPullRequestPersistenceFailure,
       runImmediateGitActionMutation,
       threadToastData,
     ],

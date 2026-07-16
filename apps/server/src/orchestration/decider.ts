@@ -2,6 +2,8 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThreadPullRequest,
+  OrchestrationWorktreeWorkspace,
   ProjectKind,
   ThreadMarker,
 } from "@synara/contracts";
@@ -16,7 +18,10 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
 } from "@synara/shared/threadWorkspace";
 import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
-import { pullRequestsMatch } from "@synara/shared/pullRequest";
+import {
+  canonicalPullRequestIdentity,
+  pullRequestsMatch,
+} from "@synara/shared/pullRequest";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
@@ -47,6 +52,49 @@ const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+
+type PullRequestReference = Pick<OrchestrationThreadPullRequest, "number" | "url">;
+
+function pullRequestFromSourceRef(sourceRef: string | null | undefined): PullRequestReference | null {
+  if (!sourceRef) return null;
+  try {
+    const match = /^\/[^/]+\/[^/]+\/pull\/(\d+)(?:\/.*)?$/i.exec(new URL(sourceRef).pathname);
+    const number = Number.parseInt(match?.[1] ?? "", 10);
+    if (!Number.isSafeInteger(number) || number <= 0) return null;
+    const reference = { number, url: sourceRef };
+    return canonicalPullRequestIdentity(reference) ? reference : null;
+  } catch {
+    return null;
+  }
+}
+
+function workspaceReferencesPullRequest(
+  workspace: OrchestrationWorktreeWorkspace,
+  pullRequest: PullRequestReference,
+): boolean {
+  const sourcePullRequest = pullRequestFromSourceRef(workspace.sourceRef);
+  return (
+    (workspace.lastKnownPr !== null &&
+      pullRequestsMatch(workspace.lastKnownPr, pullRequest)) ||
+    (sourcePullRequest !== null && pullRequestsMatch(sourcePullRequest, pullRequest))
+  );
+}
+
+function findActiveWorkspaceForPullRequest(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly projectId: string;
+  readonly pullRequest: PullRequestReference;
+  readonly excludeWorkspaceId?: string;
+}): OrchestrationWorktreeWorkspace | undefined {
+  return (input.readModel.workspaces ?? []).find(
+    (workspace) =>
+      workspace.id !== input.excludeWorkspaceId &&
+      workspace.projectId === input.projectId &&
+      workspace.deletedAt === null &&
+      workspace.state !== "archived" &&
+      workspaceReferencesPullRequest(workspace, input.pullRequest),
+  );
+}
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -549,19 +597,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (command.lastKnownPr) {
-        const existingPrWorkspace = (readModel.workspaces ?? []).find(
-          (workspace) =>
-            workspace.projectId === command.projectId &&
-            workspace.deletedAt === null &&
-            workspace.state !== "archived" &&
-            workspace.lastKnownPr !== null &&
-            pullRequestsMatch(workspace.lastKnownPr, command.lastKnownPr!),
-        );
+      const requestedPullRequest =
+        command.lastKnownPr ?? pullRequestFromSourceRef(command.sourceRef);
+      if (requestedPullRequest) {
+        const existingPrWorkspace = findActiveWorkspaceForPullRequest({
+          readModel,
+          projectId: command.projectId,
+          pullRequest: requestedPullRequest,
+        });
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: `Pull request #${command.lastKnownPr.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
+            detail: `Pull request #${requestedPullRequest.number} is already attached to workspace '${existingPrWorkspace.id}'.`,
           });
         }
       }
@@ -737,15 +784,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (command.lastKnownPr) {
-        const existingPrWorkspace = (readModel.workspaces ?? []).find(
-          (candidate) =>
-            candidate.id !== workspace.id &&
-            candidate.projectId === workspace.projectId &&
-            candidate.deletedAt === null &&
-            candidate.state !== "archived" &&
-            candidate.lastKnownPr !== null &&
-            pullRequestsMatch(candidate.lastKnownPr, command.lastKnownPr!),
-        );
+        const existingPrWorkspace = findActiveWorkspaceForPullRequest({
+          readModel,
+          projectId: workspace.projectId,
+          pullRequest: command.lastKnownPr,
+          excludeWorkspaceId: workspace.id,
+        });
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,

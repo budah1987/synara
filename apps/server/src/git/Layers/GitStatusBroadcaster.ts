@@ -66,6 +66,13 @@ export const GitStatusBroadcasterLive = Layer.effect(
       string,
       { readonly error: GitManagerServiceError; readonly retryAt: number }
     >();
+    const inputsByCacheKey = new Map<string, GitStatusInput>();
+
+    const rememberInput = (input: GitStatusInput): GitStatusInput => {
+      const normalizedInput = { ...input, cwd: normalizeCwd(input.cwd) };
+      inputsByCacheKey.set(statusCacheKey(normalizedInput), normalizedInput);
+      return normalizedInput;
+    };
 
     const getCachedStatus = (cacheKey: string) =>
       Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cacheKey) ?? null));
@@ -187,12 +194,11 @@ export const GitStatusBroadcasterLive = Layer.effect(
 
     const getStatus: GitStatusBroadcasterShape["getStatus"] = (input) =>
       Effect.gen(function* () {
-        const normalizedCwd = normalizeCwd(input.cwd);
-        const normalizedInput = { ...input, cwd: normalizedCwd };
+        const normalizedInput = rememberInput(input);
         const cacheKey = statusCacheKey(normalizedInput);
         const cached = yield* getCachedStatus(cacheKey);
         if (cached?.local && cached.remote) {
-          const details = yield* gitCore.statusDetails(normalizedCwd);
+          const details = yield* gitCore.statusDetails(normalizedInput.cwd);
           if (canReuseCachedRemoteStatus({ cached, details })) {
             const local = yield* updateCachedLocalStatus(
               cacheKey,
@@ -207,13 +213,41 @@ export const GitStatusBroadcasterLive = Layer.effect(
         withFailureBackoff(statusCacheKey({ ...input, cwd: normalizeCwd(input.cwd) }), operation),
       );
 
-    const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = (cwd) =>
-      withFailureBackoff(
-        statusCacheKey({ cwd: normalizeCwd(cwd) }),
-        loadStatus({ cwd: normalizeCwd(cwd) }, statusCacheKey({ cwd: normalizeCwd(cwd) }), {
-          publish: true,
-        }),
+    const refreshInput = (input: GitStatusInput) => {
+      const normalizedInput = rememberInput(input);
+      const cacheKey = statusCacheKey(normalizedInput);
+      return withFailureBackoff(
+        cacheKey,
+        loadStatus(normalizedInput, cacheKey, { publish: true }),
       );
+    };
+
+    const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = (cwd) =>
+      Effect.gen(function* () {
+        const normalizedCwd = normalizeCwd(cwd);
+        const defaultInput = rememberInput({ cwd: normalizedCwd });
+        const defaultKey = statusCacheKey(defaultInput);
+        const inputs = [
+          defaultInput,
+          ...Array.from(inputsByCacheKey.entries())
+            .filter(
+              ([cacheKey, input]) => cacheKey !== defaultKey && input.cwd === normalizedCwd,
+            )
+            .map(([, input]) => input),
+        ];
+        const exits = yield* Effect.all(
+          inputs.map((input) => Effect.exit(refreshInput(input))),
+          { concurrency: 4 },
+        );
+        const defaultExit = exits[0];
+        if (!defaultExit) {
+          return yield* Effect.die("Git status refresh did not produce a default result");
+        }
+        if (Exit.isFailure(defaultExit)) {
+          return yield* Effect.failCause(defaultExit.cause);
+        }
+        return defaultExit.value;
+      });
 
     const refreshLocalStatus: GitStatusBroadcasterShape["refreshLocalStatus"] = (cwd) =>
       refreshStatus(cwd).pipe(Effect.map(splitLocalStatus));

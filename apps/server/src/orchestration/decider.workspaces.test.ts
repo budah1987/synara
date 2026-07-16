@@ -305,6 +305,130 @@ describe("worktree workspace commands", () => {
     ).rejects.toThrow("already attached to workspace 'workspace-first'");
   });
 
+  it("rejects duplicate pull-request workspaces identified only by canonical source refs", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const makeAttach = (suffix: string, url: string) => ({
+      type: "workspace.attach" as const,
+      commandId: CommandId.makeUnsafe(`workspace-source-attach-${suffix}`),
+      workspaceId: WorktreeWorkspaceId.makeUnsafe(`workspace-source-${suffix}`),
+      threadId: ThreadId.makeUnsafe(`thread-source-${suffix}`),
+      projectId: ProjectId.makeUnsafe("workspace-project"),
+      title: `Source review ${suffix}`,
+      path: `/tmp/workspace-source-${suffix}`,
+      branch: `feature/source-${suffix}`,
+      headRef: null,
+      targetRef: "main",
+      sourceKind: "pull-request" as const,
+      sourceRef: url,
+      modelSelection,
+      runtimeMode: "full-access" as const,
+      interactionMode: "default" as const,
+      createdAt: now,
+    });
+    const first = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: makeAttach("first", "https://github.com/Acme/Repo/pull/42"),
+      }),
+    );
+    const readModel = await apply(initial, Array.isArray(first) ? first : [first]);
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: makeAttach("second", "https://github.com/acme/repo/pull/42/files"),
+        }),
+      ),
+    ).rejects.toThrow("already attached to workspace 'workspace-source-first'");
+  });
+
+  it("rejects metadata association when another workspace source ref owns the pull request", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const attach = (input: {
+      readonly suffix: string;
+      readonly sourceKind: "branch" | "pull-request";
+      readonly sourceRef: string;
+    }) =>
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.attach",
+          commandId: CommandId.makeUnsafe(`workspace-meta-attach-${input.suffix}`),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe(`workspace-meta-${input.suffix}`),
+          threadId: ThreadId.makeUnsafe(`thread-meta-${input.suffix}`),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          title: `Metadata ${input.suffix}`,
+          path: `/tmp/workspace-meta-${input.suffix}`,
+          branch: `feature/meta-${input.suffix}`,
+          headRef: null,
+          targetRef: "main",
+          sourceKind: input.sourceKind,
+          sourceRef: input.sourceRef,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      });
+    const first = await Effect.runPromise(
+      attach({
+        suffix: "owner",
+        sourceKind: "pull-request",
+        sourceRef: "https://github.com/Acme/Repo/pull/42",
+      }),
+    );
+    let readModel = await apply(initial, Array.isArray(first) ? first : [first]);
+    const second = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.attach",
+          commandId: CommandId.makeUnsafe("workspace-meta-attach-candidate"),
+          workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-meta-candidate"),
+          threadId: ThreadId.makeUnsafe("thread-meta-candidate"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          title: "Metadata candidate",
+          path: "/tmp/workspace-meta-candidate",
+          branch: "feature/meta-candidate",
+          headRef: null,
+          targetRef: "main",
+          sourceKind: "branch",
+          sourceRef: "feature/meta-candidate",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(second) ? second : [second]);
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "workspace.meta.update",
+            commandId: CommandId.makeUnsafe("workspace-meta-link-candidate"),
+            workspaceId: WorktreeWorkspaceId.makeUnsafe("workspace-meta-candidate"),
+            lastKnownPr: {
+              number: 42,
+              title: "Canonical PR",
+              url: "https://github.com/acme/repo/pull/42/",
+              baseBranch: "main",
+              headBranch: "feature/meta-candidate",
+              state: "open",
+            },
+            updatedAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow("already attached to workspace 'workspace-meta-owner'");
+  });
+
   it("rejects a stale provisioning completion generation", async () => {
     const now = new Date().toISOString();
     const initial = await repositoryProject(now);
