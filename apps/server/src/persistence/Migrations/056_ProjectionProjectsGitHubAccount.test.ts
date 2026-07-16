@@ -12,11 +12,11 @@ const columns = (sql: SqlClient.SqlClient) =>
     Effect.map((rows) => rows.map((row) => row.name)),
   );
 
-layer("055_ProjectionProjectsGitHubAccount", (it) => {
+layer("056_ProjectionProjectsGitHubAccount", (it) => {
   it.effect("adds nullable durable GitHub account state idempotently", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 54 });
+      yield* runMigrations({ toMigrationInclusive: 55 });
       assert.notInclude(yield* columns(sql), "github_account_json");
 
       yield* runMigrations();

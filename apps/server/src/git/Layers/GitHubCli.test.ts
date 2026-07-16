@@ -259,7 +259,7 @@ layer("GitHubCliLive", (it) => {
         expect.arrayContaining(["--state", "open", "--limit", "25"]),
       );
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
-        expect.arrayContaining(["--limit", "100", "--json", PULL_REQUEST_LIST_JSON_FIELDS]),
+        expect.arrayContaining(["--limit", "1000", "--json", PULL_REQUEST_LIST_JSON_FIELDS]),
       );
     }),
   );
