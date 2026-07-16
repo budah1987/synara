@@ -158,7 +158,11 @@ import {
   warningIdsForAcknowledgedRisks,
 } from "../lib/automationDraft";
 import { dispatchThreadRename } from "../lib/threadRename";
-import { archiveThreadFromClient, unarchiveThreadFromClient } from "../lib/threadArchive";
+import {
+  archiveThreadFromClient,
+  isThreadAlreadyUnarchivedError,
+  unarchiveThreadFromClient,
+} from "../lib/threadArchive";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -10193,16 +10197,16 @@ export default function ChatView({
     [onNavigateToThread, storeOpenChatThreadPage],
   );
   const onCloseWorkspaceChat = useCallback(
-    async (closingThreadId: ThreadId, nextThreadId: ThreadId | null) => {
+    async (closingThreadId: ThreadId, nextThreadId: ThreadId | null): Promise<boolean> => {
       const closingThread = getThreadFromState(useStore.getState(), closingThreadId);
-      if (!closingThread) return;
+      if (!closingThread) return false;
       if (isThreadRunningTurn(closingThread)) {
         toastManager.add({
           type: "error",
           title: "Cannot close chat",
           description: "Stop the running session before closing this chat.",
         });
-        return;
+        return false;
       }
 
       const api = readNativeApi();
@@ -10212,7 +10216,7 @@ export default function ChatView({
           title: "Unable to close chat",
           description: "Reconnect to the server and try again.",
         });
-        return;
+        return false;
       }
 
       const wasActive = closingThreadId === activeThread?.id;
@@ -10255,15 +10259,47 @@ export default function ChatView({
             },
           },
         });
+        return true;
       } catch (error) {
         toastManager.add({
           type: "error",
           title: "Unable to close chat",
           description: error instanceof Error ? error.message : "Unable to archive the chat.",
         });
+        return false;
       }
     },
     [activeThread?.id, navigate, onNavigateToThread, onNewWorkspaceChat, onOpenEditorChat],
+  );
+  const onReopenWorkspaceChat = useCallback(
+    async (threadId: ThreadId): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to reopen chat",
+          description: "Reconnect to the server and try again.",
+        });
+        return false;
+      }
+      try {
+        await unarchiveThreadFromClient(api.orchestration, threadId);
+        onNavigateToThread(threadId);
+        return true;
+      } catch (error) {
+        if (isThreadAlreadyUnarchivedError(error, threadId)) {
+          onNavigateToThread(threadId);
+          return true;
+        }
+        toastManager.add({
+          type: "error",
+          title: "Unable to reopen chat",
+          description: error instanceof Error ? error.message : "Unable to restore the chat.",
+        });
+        return false;
+      }
+    },
+    [onNavigateToThread],
   );
   const onOpenEditorTerminal = useCallback(() => {
     if (!activeThreadId) return;
@@ -11240,6 +11276,7 @@ export default function ChatView({
                   activeSurface: terminalWorkspaceTerminalTabActive ? "terminal" : "chat",
                   terminalAvailable: terminalState.terminalOpen,
                   terminalHasRunningActivity: terminalState.runningTerminalIds.length > 0,
+                  menuActionsEnabled: isFocusedPane,
                   onNewChat: activeThread.workspaceId
                     ? () => void onNewWorkspaceChat()
                     : onNewEditorChat,
@@ -11250,7 +11287,8 @@ export default function ChatView({
                   onRenameChat: (targetThreadId, title) =>
                     setRenameThreadTarget({ threadId: targetThreadId, title }),
                   onCloseChat: (targetThreadId, nextThreadId) =>
-                    void onCloseWorkspaceChat(targetThreadId, nextThreadId),
+                    onCloseWorkspaceChat(targetThreadId, nextThreadId),
+                  onReopenChat: onReopenWorkspaceChat,
                 }
               : null
           }

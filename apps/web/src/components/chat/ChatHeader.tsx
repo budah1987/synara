@@ -70,11 +70,16 @@ import {
   type ThreadStatusPill,
 } from "../Sidebar.logic";
 import {
+  pushEditorRailClosedChatTab,
+  readEditorRailClosedChatTabs,
   storeEditorRailActiveChat,
   readEditorRailChatTabs,
+  storeEditorRailClosedChatTabs,
   storeEditorRailChatTabs,
   type EditorRailChatTabSnapshot,
 } from "../../editorViewState";
+import { resolveShortcutCommand } from "../../keybindings";
+import { isTerminalFocused } from "../../lib/terminalFocus";
 import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
@@ -156,13 +161,15 @@ interface ChatHeaderProps {
     activeSurface: "chat" | "terminal";
     terminalAvailable: boolean;
     terminalHasRunningActivity: boolean;
+    menuActionsEnabled: boolean;
     onNewChat: () => void;
     onNewTerminal: () => void;
     onOpenChat: (threadId: ThreadId) => void;
     onOpenTerminal: () => void;
     onCloseTerminal: () => void;
     onRenameChat: (threadId: ThreadId, title: string) => void;
-    onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
+    onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => Promise<boolean>;
+    onReopenChat: (threadId: ThreadId) => Promise<boolean>;
   } | null;
   workspaceHeader?: {
     title: string;
@@ -328,13 +335,16 @@ function EditorRailTabs(props: {
   activeSurface: "chat" | "terminal";
   terminalAvailable: boolean;
   terminalHasRunningActivity: boolean;
+  menuActionsEnabled: boolean;
+  keybindings: ResolvedKeybindingsConfig;
   onNewChat: () => void;
   onNewTerminal: () => void;
   onOpenChat: (threadId: ThreadId) => void;
   onOpenTerminal: () => void;
   onCloseTerminal: () => void;
   onRenameChat: (threadId: ThreadId, title: string) => void;
-  onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => void;
+  onCloseChat: (threadId: ThreadId, nextThreadId: ThreadId | null) => Promise<boolean>;
+  onReopenChat: (threadId: ThreadId) => Promise<boolean>;
   onNavigateToThread: (threadId: ThreadId) => void;
 }) {
   const tabScopeKey = props.workspaceId
@@ -536,25 +546,87 @@ function EditorRailTabs(props: {
     storeEditorRailActiveChat(tabScopeKey, threadId);
     props.onOpenChat(threadId);
   };
-  const closeChatTab = (threadId: ThreadId) => {
-    const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
-    const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
-    if (props.workspaceId !== null) {
-      props.onCloseChat(threadId, closingActiveChat ? (nextChatTab?.id ?? null) : null);
-      return;
+  const closeChatTab = useCallback(
+    async (threadId: ThreadId) => {
+      const closingTab = chatTabs.find((thread) => thread.id === threadId);
+      if (!closingTab) return;
+      const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
+      const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
+      if (props.workspaceId !== null) {
+        const closed = await props.onCloseChat(
+          threadId,
+          closingActiveChat ? (nextChatTab?.id ?? null) : null,
+        );
+        if (closed) pushEditorRailClosedChatTab(tabScopeKey, closingTab);
+        return;
+      }
+      pushEditorRailClosedChatTab(tabScopeKey, closingTab);
+      setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
+      if (!closingActiveChat) return;
+      if (nextChatTab) {
+        props.onOpenChat(nextChatTab.id);
+        return;
+      }
+      if (terminalTabVisible) openTerminalTab();
+    },
+    [chatTabs, props, setAndStoreOpenChatTabs, tabScopeKey, terminalTabVisible],
+  );
+  const reopenClosedChatTab = useCallback(async () => {
+    const closedTabs = readEditorRailClosedChatTabs(tabScopeKey);
+    const closedTab = closedTabs.at(-1);
+    if (!closedTab) return;
+    if (props.workspaceId !== null && !(await props.onReopenChat(closedTab.id))) return;
+
+    storeEditorRailClosedChatTabs(tabScopeKey, closedTabs.slice(0, -1));
+    if (props.workspaceId === null) {
+      setAndStoreOpenChatTabs((current) =>
+        current.some((tab) => tab.id === closedTab.id) ? current : [...current, closedTab],
+      );
+      storeEditorRailActiveChat(tabScopeKey, closedTab.id);
+      props.onOpenChat(closedTab.id);
     }
-    setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
-    if (!closingActiveChat) {
-      return;
-    }
-    if (nextChatTab) {
-      props.onOpenChat(nextChatTab.id);
-      return;
-    }
-    if (terminalTabVisible) {
-      openTerminalTab();
-    }
-  };
+  }, [props, setAndStoreOpenChatTabs, tabScopeKey]);
+  useEffect(() => {
+    if (!props.menuActionsEnabled) return;
+    const onMenuAction = window.desktopBridge?.onMenuAction;
+    if (typeof onMenuAction !== "function") return;
+    return onMenuAction((action) => {
+      if (action === "close-active-tab") {
+        if (props.activeSurface === "terminal") {
+          closeTerminalTab();
+        } else {
+          void closeChatTab(props.activeThreadId);
+        }
+      } else if (action === "reopen-closed-tab") {
+        void reopenClosedChatTab();
+      }
+    });
+  }, [closeChatTab, props, reopenClosedChatTab]);
+  useEffect(() => {
+    if (!props.menuActionsEnabled) return;
+    const handler = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      const command = resolveShortcutCommand(event, props.keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen: props.terminalAvailable,
+          terminalWorkspaceOpen: props.workspaceId !== null && props.terminalAvailable,
+          terminalWorkspaceChatTabActive: props.activeSurface === "chat",
+          terminalWorkspaceTerminalTabActive: props.activeSurface === "terminal",
+        },
+      });
+      if (command !== "chat.closeActiveTab" && command !== "chat.reopenClosedTab") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (command === "chat.closeActiveTab") {
+        void closeChatTab(props.activeThreadId);
+      } else {
+        void reopenClosedChatTab();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [closeChatTab, props, reopenClosedChatTab]);
   const openChatTabContextMenu = (
     event: React.MouseEvent<HTMLDivElement>,
     thread: EditorRailChatTab,
@@ -575,7 +647,7 @@ function EditorRailTabs(props: {
       if (clicked === "rename") {
         props.onRenameChat(thread.id, thread.title);
       } else if (clicked === "close") {
-        closeChatTab(thread.id);
+        void closeChatTab(thread.id);
       }
     })();
   };
@@ -674,7 +746,7 @@ function EditorRailTabs(props: {
                     closePlacement="trailing"
                     renameLabel={`Rename ${thread.title}`}
                     onSelect={() => openChatTab(thread.id)}
-                    onClose={() => closeChatTab(thread.id)}
+                    onClose={() => void closeChatTab(thread.id)}
                     onRename={() => props.onRenameChat(thread.id, thread.title)}
                     onContextMenu={(event) => openChatTabContextMenu(event, thread)}
                   />
@@ -942,6 +1014,8 @@ export const ChatHeader = memo(function ChatHeader({
       activeSurface={editorChatControls.activeSurface}
       terminalAvailable={editorChatControls.terminalAvailable}
       terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
+      menuActionsEnabled={editorChatControls.menuActionsEnabled}
+      keybindings={keybindings}
       onNewChat={editorChatControls.onNewChat}
       onNewTerminal={editorChatControls.onNewTerminal}
       onOpenChat={editorChatControls.onOpenChat}
@@ -949,6 +1023,7 @@ export const ChatHeader = memo(function ChatHeader({
       onCloseTerminal={editorChatControls.onCloseTerminal}
       onRenameChat={editorChatControls.onRenameChat}
       onCloseChat={editorChatControls.onCloseChat}
+      onReopenChat={editorChatControls.onReopenChat}
       onNavigateToThread={onNavigateToThread}
     />
   ) : null;

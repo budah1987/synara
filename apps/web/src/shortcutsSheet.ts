@@ -168,6 +168,16 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Cycle to the next conversation tab in the active worktree.",
   },
   {
+    command: "chat.closeActiveTab",
+    label: "Close active tab",
+    description: "Close the conversation tab currently in focus.",
+  },
+  {
+    command: "chat.reopenClosedTab",
+    label: "Reopen closed tab",
+    description: "Restore the most recently closed conversation tab.",
+  },
+  {
     command: "workspace.visible.previous",
     label: "Previous worktree",
     description:

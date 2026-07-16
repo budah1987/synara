@@ -77,7 +77,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+arrowup", command: "terminal.splitUp", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
-  { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
+  {
+    key: "mod+w",
+    command: "terminal.workspace.closeActive",
+    when: "terminalWorkspaceOpen && terminalWorkspaceTerminalTabActive",
+  },
   { key: "mod+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },
   { key: "mod+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
@@ -107,6 +111,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+x", command: "chat.newCodex", when: "!terminalFocus || isMac" },
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus || isMac" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus || isMac" },
+  {
+    key: "mod+w",
+    command: "chat.closeActiveTab",
+    when: "!terminalFocus && (!terminalWorkspaceOpen || terminalWorkspaceChatTabActive)",
+  },
+  { key: "mod+shift+w", command: "chat.reopenClosedTab", when: "!terminalFocus || isMac" },
   // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
   // standalone PWA windows have no tab strip, so the chord reaches the page. It remains
   // app-level even with terminal focus; the web route captures it before xterm input.

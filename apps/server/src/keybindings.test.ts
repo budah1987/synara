@@ -86,6 +86,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.strictEqual(defaultShortcutFor("workspace.visible.previous"), "mod+arrowup");
       assert.strictEqual(defaultShortcutFor("chat.newConversation"), "mod+t");
       assert.strictEqual(defaultShortcutFor("chat.newTerminal"), "mod+shift+t");
+      assert.strictEqual(defaultShortcutFor("chat.closeActiveTab"), "mod+w");
+      assert.strictEqual(defaultShortcutFor("chat.reopenClosedTab"), "mod+shift+w");
       assert.isUndefined(defaultShortcutFor("terminal.new"));
     }),
   );

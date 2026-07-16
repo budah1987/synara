@@ -95,6 +95,7 @@ import {
 import { registerDesktopVoiceTranscriptionHandler } from "./voiceTranscription";
 import {
   resolveDesktopMenuAccelerator,
+  resolveDesktopTabMenuItems,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -1251,6 +1252,7 @@ async function checkForUpdatesFromMenu(): Promise<void> {
 function configureApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [];
   const keyboardShortcutsAccelerator = resolveKeyboardShortcutsMenuAccelerator(process.platform);
+  const tabMenuItems = resolveDesktopTabMenuItems(process.platform);
   const acceleratorProps = (
     accelerator: MenuItemConstructorOptions["accelerator"],
   ): Pick<MenuItemConstructorOptions, "accelerator"> => {
@@ -1317,7 +1319,14 @@ function configureApplicationMenu(): void {
               },
               { type: "separator" as const },
             ]),
-        { role: process.platform === "darwin" ? "close" : "quit" },
+        ...tabMenuItems.map((item) => ({
+          label: item.label,
+          ...(item.accelerator ? { accelerator: item.accelerator } : {}),
+          click: () => dispatchMenuAction(item.action),
+        })),
+        ...(process.platform === "darwin"
+          ? []
+          : [{ type: "separator" as const }, { role: "quit" as const }]),
       ],
     },
     { role: "editMenu" },

@@ -94,6 +94,13 @@ const whenCreationAllowed = whenOr(
   whenNot(whenIdentifier("terminalFocus")),
   whenIdentifier("isMac"),
 );
+const whenChatTabCloseAllowed = whenAnd(
+  whenNot(whenIdentifier("terminalFocus")),
+  whenOr(
+    whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    whenIdentifier("terminalWorkspaceChatTabActive"),
+  ),
+);
 
 interface TestBinding {
   shortcut: KeybindingShortcut;
@@ -135,7 +142,10 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("w"),
     command: "terminal.workspace.closeActive",
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+    whenAst: whenAnd(
+      whenIdentifier("terminalWorkspaceOpen"),
+      whenIdentifier("terminalWorkspaceTerminalTabActive"),
+    ),
   },
   {
     shortcut: modShortcut("1"),
@@ -220,6 +230,16 @@ const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("t", { shiftKey: true }),
     command: "chat.newTerminal",
+    whenAst: whenCreationAllowed,
+  },
+  {
+    shortcut: modShortcut("w"),
+    command: "chat.closeActiveTab",
+    whenAst: whenChatTabCloseAllowed,
+  },
+  {
+    shortcut: modShortcut("w", { shiftKey: true }),
+    command: "chat.reopenClosedTab",
     whenAst: whenCreationAllowed,
   },
   {
@@ -682,19 +702,28 @@ describe("workspace terminal tab shortcuts", () => {
     );
   });
 
-  it("resolves the active workspace close shortcut only while the terminal workspace is open", () => {
+  it("resolves the workspace close shortcut only for the active terminal tab", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: true, terminalFocus: true },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceTerminalTabActive: true,
+          terminalFocus: true,
+        },
       }),
       "terminal.workspace.closeActive",
     );
-    assert.isNull(
+    assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: false, terminalFocus: false },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceChatTabActive: true,
+          terminalFocus: false,
+        },
       }),
+      "chat.closeActiveTab",
     );
   });
 
@@ -740,7 +769,10 @@ describe("workspace terminal tab shortcuts", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "w", metaKey: true }), legacyBindings, {
         platform: "MacIntel",
-        context: { terminalWorkspaceOpen: true },
+        context: {
+          terminalWorkspaceOpen: true,
+          terminalWorkspaceTerminalTabActive: true,
+        },
       }),
       "terminal.workspace.closeActive",
     );
@@ -1128,6 +1160,23 @@ describe("chat/editor shortcuts", () => {
         platform: "MacIntel",
         context: { terminalFocus: true },
       }),
+    );
+  });
+
+  it("closes and reopens conversation tabs", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "chat.closeActiveTab",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "w", metaKey: true, shiftKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "chat.reopenClosedTab",
     );
   });
 

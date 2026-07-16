@@ -79,6 +79,13 @@ const whenThreadJumpAvailable = whenAnd(
 // the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
 // where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
 const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
+const whenChatTabCloseAllowed = whenAnd(
+  whenNotTerminalFocus,
+  whenOr(
+    whenNot(whenIdentifier("terminalWorkspaceOpen")),
+    whenIdentifier("terminalWorkspaceChatTabActive"),
+  ),
+);
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
@@ -134,6 +141,16 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "chat.split",
     shortcut: commandShortcut("\\"),
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "chat.closeActiveTab",
+    shortcut: commandShortcut("w"),
+    whenAst: whenChatTabCloseAllowed,
+  },
+  {
+    command: "chat.reopenClosedTab",
+    shortcut: commandShortcut("w", { shiftKey: true }),
     whenAst: whenCreationAllowed,
   },
   // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
@@ -258,7 +275,10 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
     command: "terminal.workspace.closeActive",
     shortcut: commandShortcut("w"),
-    whenAst: whenIdentifier("terminalWorkspaceOpen"),
+    whenAst: whenAnd(
+      whenIdentifier("terminalWorkspaceOpen"),
+      whenIdentifier("terminalWorkspaceTerminalTabActive"),
+    ),
   },
   {
     command: "terminal.workspace.terminal",

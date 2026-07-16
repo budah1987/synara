@@ -64,6 +64,8 @@ const STATIC_KEYBINDING_COMMANDS = [
   "chat.jump.9",
   "chat.visible.next",
   "chat.visible.previous",
+  "chat.closeActiveTab",
+  "chat.reopenClosedTab",
   "workspace.visible.next",
   "workspace.visible.previous",
   "editor.openFavorite",
