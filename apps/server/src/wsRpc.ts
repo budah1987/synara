@@ -938,7 +938,10 @@ export const makeWsRpcLayer = () =>
           rpcEffect(open.openInEditor(input), "Failed to open editor"),
 
         [WS_METHODS.gitGithubRepository]: (input) =>
-          rpcEffect(resolveGitHubRepository(git, input.cwd), "Failed to resolve GitHub repository"),
+          rpcEffect(
+            resolveGitHubRepository(git, input.cwd, input.account?.host ?? "github.com"),
+            "Failed to resolve GitHub repository",
+          ),
         [WS_METHODS.gitStatus]: (input) =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>
@@ -1089,7 +1092,11 @@ export const makeWsRpcLayer = () =>
                 );
               }
               if (destinationExists) {
-                const existingRepository = yield* resolveGitHubRepository(git, destination);
+                const existingRepository = yield* resolveGitHubRepository(
+                  git,
+                  destination,
+                  input.account?.host ?? "github.com",
+                );
                 if (
                   existingRepository.repository?.nameWithOwner.toLowerCase() !==
                   repository.nameWithOwner.toLowerCase()
