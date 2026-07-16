@@ -325,7 +325,12 @@ function resolvePullRequest(manager: GitManagerShape, input: { cwd: string; refe
 
 function preparePullRequestThread(
   manager: GitManagerShape,
-  input: { cwd: string; reference: string; mode: "local" | "worktree" },
+  input: {
+    cwd: string;
+    reference: string;
+    mode: "local" | "worktree";
+    managedWorktreePath?: string;
+  },
 ) {
   return manager.preparePullRequestThread(input);
 }
@@ -2227,7 +2232,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("prepares pull request threads in worktree mode on the PR head branch", () =>
+  it.effect("prepares pull request threads at a caller-supplied managed worktree path", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
       yield* initRepo(repoDir);
@@ -2241,6 +2246,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-worktree"]);
       yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/77/head"]);
       yield* runGit(repoDir, ["checkout", "main"]);
+      const managedRoot = yield* makeTempDir("synara-managed-pr-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
 
       const { manager } = yield* makeManager({
         ghScenario: {
@@ -2259,16 +2266,96 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "77",
         mode: "worktree",
+        managedWorktreePath,
       });
 
       expect(result.branch).toBe("feature/pr-worktree");
-      expect(result.worktreePath).not.toBeNull();
+      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+        fs.realpathSync.native(managedWorktreePath),
+      );
       expect(fs.existsSync(result.worktreePath as string)).toBe(true);
       const worktreeBranch = (yield* runGit(result.worktreePath as string, [
         "branch",
         "--show-current",
       ])).stdout.trim();
       expect(worktreeBranch).toBe("feature/pr-worktree");
+    }),
+  );
+
+  it.effect("rejects an occupied managed worktree path without changing its contents", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-occupied-path"]);
+      fs.writeFileSync(path.join(repoDir, "branch.txt"), "branch\n");
+      yield* runGit(repoDir, ["add", "branch.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Occupied path PR branch"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const managedWorktreePath = yield* makeTempDir("synara-occupied-pr-");
+      const sentinelPath = path.join(managedWorktreePath, "keep.txt");
+      fs.writeFileSync(sentinelPath, "do not replace\n");
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 177,
+            title: "Occupied path PR",
+            url: "https://github.com/example-org/sample-repo/pull/177",
+            baseRefName: "main",
+            headRefName: "feature/pr-occupied-path",
+            state: "open",
+          },
+        },
+      });
+
+      const errorMessage = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+
+      expect(errorMessage).toContain("already occupied");
+      expect(fs.readFileSync(sentinelPath, "utf8")).toBe("do not replace\n");
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(repoDir, ["worktree", "list", "--porcelain"])).stdout).not.toContain(
+        managedWorktreePath,
+      );
+    }),
+  );
+
+  it.effect("rejects unsafe managed worktree paths before preparing Git state", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      const { manager, ghCalls } = yield* makeManager();
+
+      const relativePathError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath: "relative/worktree",
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(relativePathError).toContain("must be absolute");
+
+      const repositoryPathError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "177",
+        mode: "worktree",
+        managedWorktreePath: path.join(repoDir, ".synara", "worktree"),
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(repositoryPathError).toContain("outside the repository root");
+      expect(ghCalls).toEqual([]);
     }),
   );
 
@@ -2287,6 +2374,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
       yield* runGit(repoDir, ["checkout", "main"]);
+      const managedRoot = yield* makeTempDir("synara-managed-fork-pr-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
 
       const { manager } = yield* makeManager({
         ghScenario: {
@@ -2314,9 +2403,12 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "81",
         mode: "worktree",
+        managedWorktreePath,
       });
 
-      expect(result.worktreePath).not.toBeNull();
+      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+        fs.realpathSync.native(managedWorktreePath),
+      );
       const upstreamRef = (yield* runGit(result.worktreePath as string, [
         "rev-parse",
         "--abbrev-ref",
@@ -2453,7 +2545,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["add", "existing.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+      const managedRoot = yield* makeTempDir("synara-reused-pr-");
+      const worktreePath = path.join(managedRoot, "worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
 
       const { manager } = yield* makeManager({
@@ -2469,10 +2562,25 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         },
       });
 
+      const otherManagedRoot = yield* makeTempDir("synara-other-managed-pr-");
+      const otherManagedPath = path.join(otherManagedRoot, "worktree");
+      const mismatchError = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "78",
+        mode: "worktree",
+        managedWorktreePath: otherManagedPath,
+      }).pipe(
+        Effect.flip,
+        Effect.map((error) => error.message),
+      );
+      expect(mismatchError).toContain("already checked out in another worktree");
+      expect(fs.existsSync(otherManagedPath)).toBe(false);
+
       const result = yield* preparePullRequestThread(manager, {
         cwd: repoDir,
         reference: "78",
         mode: "worktree",
+        managedWorktreePath: worktreePath,
       });
 
       expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
@@ -2617,7 +2725,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["commit", "-m", "Reused fork PR branch"]);
       yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-reused-fork"]);
       yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-reused-fork-${Date.now()}`);
+      const managedRoot = yield* makeTempDir("synara-reused-fork-pr-");
+      const worktreePath = path.join(managedRoot, "worktree");
       yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-reused-fork"]);
       yield* runGit(worktreePath, ["branch", "--unset-upstream"], true);
 
@@ -2647,6 +2756,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         cwd: repoDir,
         reference: "83",
         mode: "worktree",
+        managedWorktreePath: worktreePath,
       });
 
       expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(

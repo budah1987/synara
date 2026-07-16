@@ -247,6 +247,7 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   reference: GitPullRequestReference,
   mode: GitPreparePullRequestThreadMode,
+  managedWorktreePath: Schema.optional(TrimmedNonEmptyStringSchema),
   account: Schema.optional(GitHubAccountSelection),
 });
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;

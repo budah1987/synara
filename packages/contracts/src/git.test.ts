@@ -131,6 +131,17 @@ describe("GitPreparePullRequestThreadInput", () => {
     expect(parsed.reference).toBe("#42");
     expect(parsed.mode).toBe("worktree");
   });
+
+  it("accepts an optional managed worktree path", () => {
+    const parsed = decodePreparePullRequestThreadInput({
+      cwd: "/repo",
+      reference: "#42",
+      mode: "worktree",
+      managedWorktreePath: "/managed/worktrees/pr-42",
+    });
+
+    expect(parsed.managedWorktreePath).toBe("/managed/worktrees/pr-42");
+  });
 });
 
 describe("GitResolvePullRequestResult", () => {

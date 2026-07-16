@@ -31,6 +31,7 @@ import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
+import { realpathNearestExisting } from "../../realpathNearestExisting.ts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
@@ -1723,6 +1724,36 @@ export const makeGitManager = Effect.gen(function* () {
     function* (input) {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = canonicalizeExistingPath(input.cwd);
+      const managedWorktreePath = yield* Effect.gen(function* () {
+        if (!input.managedWorktreePath) {
+          return null;
+        }
+        if (input.mode !== "worktree") {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            "A managed worktree path can only be used in worktree mode.",
+          );
+        }
+        if (!path.isAbsolute(input.managedWorktreePath)) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            "The managed worktree path must be absolute.",
+          );
+        }
+
+        const canonicalPath = yield* realpathNearestExisting(input.managedWorktreePath);
+        const relativeToRoot = path.relative(rootWorktreePath, canonicalPath);
+        const isInsideRoot =
+          relativeToRoot === "" ||
+          (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot));
+        if (isInsideRoot) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            "The managed worktree path must be outside the repository root.",
+          );
+        }
+        return canonicalPath;
+      });
       const pullRequestSummary = yield* gitHubCli.getPullRequest({
         cwd: input.cwd,
         reference: normalizedReference,
@@ -1775,6 +1806,45 @@ export const makeGitManager = Effect.gen(function* () {
       const localPullRequestBranch =
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
+      const managedPathExists = managedWorktreePath
+        ? yield* fileSystem.exists(managedWorktreePath).pipe(
+            Effect.mapError((cause) =>
+              gitManagerError(
+                "preparePullRequestThread",
+                `Could not inspect the managed worktree path '${managedWorktreePath}'.`,
+                cause,
+              ),
+            ),
+          )
+        : false;
+
+      const rejectManagedPathMismatch = (
+        existingWorktreePath: string | null,
+      ): Effect.Effect<void, GitManagerError> => {
+        if (!managedWorktreePath) {
+          return Effect.void;
+        }
+        if (
+          existingWorktreePath &&
+          canonicalizeExistingPath(existingWorktreePath) === managedWorktreePath
+        ) {
+          return Effect.void;
+        }
+        if (existingWorktreePath) {
+          return gitManagerError(
+            "preparePullRequestThread",
+            `The pull request branch is already checked out in another worktree at '${existingWorktreePath}'.`,
+          );
+        }
+        if (managedPathExists) {
+          return gitManagerError(
+            "preparePullRequestThread",
+            `The managed worktree path '${managedWorktreePath}' is already occupied by an unrelated filesystem entry.`,
+          );
+        }
+        return Effect.void;
+      };
+
       const findLocalHeadBranch = (cwd: string) =>
         gitCore.listBranches({ cwd }).pipe(
           Effect.map((result) => {
@@ -1807,6 +1877,7 @@ export const makeGitManager = Effect.gen(function* () {
         existingBranchBeforeFetch?.worktreePath &&
         existingBranchBeforeFetchPath !== rootWorktreePath
       ) {
+        yield* rejectManagedPathMismatch(existingBranchBeforeFetch.worktreePath);
         yield* ensureExistingWorktreeUpstream(existingBranchBeforeFetch.worktreePath);
         return {
           pullRequest,
@@ -1820,6 +1891,8 @@ export const makeGitManager = Effect.gen(function* () {
           "This PR branch is already checked out in the main repo. Use Local, or switch the main repo off that branch before creating a worktree thread.",
         );
       }
+
+      yield* rejectManagedPathMismatch(null);
 
       yield* materializePullRequestHeadBranch(
         input.cwd,
@@ -1836,6 +1909,7 @@ export const makeGitManager = Effect.gen(function* () {
         existingBranchAfterFetch?.worktreePath &&
         existingBranchAfterFetchPath !== rootWorktreePath
       ) {
+        yield* rejectManagedPathMismatch(existingBranchAfterFetch.worktreePath);
         yield* ensureExistingWorktreeUpstream(existingBranchAfterFetch.worktreePath);
         return {
           pullRequest,
@@ -1853,7 +1927,7 @@ export const makeGitManager = Effect.gen(function* () {
       const worktree = yield* gitCore.createWorktree({
         cwd: input.cwd,
         branch: localPullRequestBranch,
-        path: null,
+        path: managedWorktreePath,
       });
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
 

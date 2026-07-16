@@ -88,6 +88,8 @@ export interface GitManagerShape {
 
   /**
    * Prepare a new thread workspace from a pull request in local or worktree mode.
+   * A managed worktree path is an exact placement request and is never allowed to
+   * replace an unrelated filesystem entry.
    */
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
