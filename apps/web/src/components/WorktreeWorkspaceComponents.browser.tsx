@@ -1,6 +1,10 @@
 import "../index.css";
 
-import { type OrchestrationWorktreeWorkspace, WorktreeWorkspaceId } from "@synara/contracts";
+import {
+  ProjectId,
+  type OrchestrationWorktreeWorkspace,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -8,12 +12,16 @@ import { useState } from "react";
 
 import { WorktreeWorkspaceContextMenu } from "./WorktreeWorkspaceContextMenu";
 import { WorktreeWorkspaceHoverCardContent } from "./WorktreeWorkspaceHoverCardContent";
+import { WorktreeWorkspaceRow } from "./WorktreeWorkspaceRow";
+import { ProjectContextMenu } from "./ProjectContextMenu";
+import { SidebarProvider } from "./ui/sidebar";
 import {
   type BranchRenameAvailability,
   WorktreeWorkspaceRenameDialog,
 } from "./WorktreeWorkspaceRenameDialog";
 
 const WORKSPACE_ID = WorktreeWorkspaceId.makeUnsafe("workspace-components-browser");
+const PROJECT_ID = ProjectId.makeUnsafe("project-components-browser");
 
 async function renderInBody(node: React.ReactNode) {
   const host = document.createElement("div");
@@ -190,6 +198,114 @@ describe("WorktreeWorkspaceHoverCardContent", () => {
       expect.anything(),
       "https://github.com/example/repo/tree/synara/seller-catalog",
     );
+  });
+});
+
+describe("WorktreeWorkspaceRow", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("keeps an empty workspace focusable and composes hover and keyboard context menus", async () => {
+    const onOpenWorkspace = vi.fn();
+    const onContextMenuAction = vi.fn();
+    const workspace = {
+      id: WORKSPACE_ID,
+      kind: "managed",
+      title: "Empty workspace",
+      path: "/repos/synara/empty",
+      branch: "feature/empty",
+      state: "ready",
+    } as OrchestrationWorktreeWorkspace;
+
+    await using _ = await renderInBody(
+      <SidebarProvider>
+        <WorktreeWorkspaceRow
+          workspace={workspace}
+          isActive={false}
+          openConversationCount={0}
+          contextMenuActions={{ "new-conversation": { label: "New conversation" } }}
+          hoverCard={{
+            branch: workspace.branch,
+            branchUrl: null,
+            path: workspace.path,
+            source: "main",
+            status: "ready",
+            onOpenBranch: vi.fn(),
+          }}
+          onOpenWorkspace={onOpenWorkspace}
+          onRenameWorkspace={vi.fn()}
+          onContextMenuAction={onContextMenuAction}
+        />
+      </SidebarProvider>,
+    );
+
+    const row = page.getByRole("button", { name: "Open Empty workspace" });
+    await row.click();
+    expect(onOpenWorkspace).toHaveBeenCalledWith(workspace);
+    await row.hover();
+    await expect.poll(() => document.body.textContent).toContain("No open conversations");
+
+    const rowElement = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Open Empty workspace"]',
+    );
+    expect(rowElement).not.toBeNull();
+    rowElement?.focus();
+    rowElement?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ContextMenu",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await page.getByRole("menuitem", { name: "New conversation" }).click();
+    expect(onContextMenuAction).toHaveBeenCalledWith("new-conversation", workspace);
+
+    const trailing = document.querySelector<HTMLElement>('[data-slot="worktree-row-trailing"]');
+    expect(trailing?.className).toContain("w-14");
+  });
+});
+
+describe("ProjectContextMenu", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("opens from Shift+F10 and dispatches only the selected project target", async () => {
+    const onAction = vi.fn();
+    await using _ = await renderInBody(
+      <ProjectContextMenu
+        trigger={<button type="button">Synara project</button>}
+        target={{ projectId: PROJECT_ID, projectPath: "/repos/synara" }}
+        actions={{
+          "new-workspace": { label: "New workspace", disabled: true },
+          "show-in-folder": { label: "Show repository in Finder" },
+          "remove-project": { label: "Remove project", destructive: true },
+        }}
+        onAction={onAction}
+      />,
+    );
+
+    const trigger = document.querySelector<HTMLButtonElement>("button");
+    expect(trigger).not.toBeNull();
+    trigger?.focus();
+    trigger?.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "F10",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await expect.poll(() => document.activeElement?.textContent?.trim()).toBe(
+      "Show repository in Finder",
+    );
+    await page.getByRole("menuitem", { name: "Show repository in Finder" }).click();
+    expect(onAction).toHaveBeenCalledWith("show-in-folder", {
+      projectId: PROJECT_ID,
+      projectPath: "/repos/synara",
+    });
   });
 });
 

@@ -17,11 +17,18 @@ import {
   Trash2,
   type LucideIcon,
 } from "~/lib/icons";
-import type { KeyboardEvent, ReactElement } from "react";
+import type { ReactElement, RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { PickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { openContextMenuFromKeyboard } from "./contextMenuKeyboard";
 import { MenuGroup, MenuItem, MenuSeparator } from "./ui/menu";
+
+export {
+  getKeyboardContextMenuPoint,
+  isContextMenuKeyboardEvent,
+  openContextMenuFromKeyboard,
+} from "./contextMenuKeyboard";
 
 export type WorktreeWorkspaceContextMenuActionId =
   | "new-conversation"
@@ -62,6 +69,7 @@ export type WorktreeWorkspaceContextMenuTarget = {
 
 export type WorktreeWorkspaceContextMenuProps = {
   trigger: ReactElement;
+  finalFocusRef?: RefObject<HTMLElement | null>;
   target: WorktreeWorkspaceContextMenuTarget;
   actions: WorktreeWorkspaceContextMenuActions;
   onAction: (
@@ -129,43 +137,9 @@ export function getFirstEnabledWorktreeWorkspaceActionId(
     .find((actionId) => actions[actionId]?.disabled !== true);
 }
 
-export function isContextMenuKeyboardEvent(
-  event: Pick<KeyboardEvent, "key" | "shiftKey">,
-): boolean {
-  return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
-}
-
-export function getKeyboardContextMenuPoint(
-  rect: Pick<DOMRect, "left" | "top" | "width" | "height">,
-) {
-  return {
-    x: rect.left + Math.min(16, rect.width / 2),
-    y: rect.top + rect.height,
-  };
-}
-
-export function openContextMenuFromKeyboard(event: KeyboardEvent<HTMLElement>): boolean {
-  if (!isContextMenuKeyboardEvent(event)) {
-    return false;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  const point = getKeyboardContextMenuPoint(event.currentTarget.getBoundingClientRect());
-  event.currentTarget.dispatchEvent(
-    new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      clientX: point.x,
-      clientY: point.y,
-      button: 2,
-    }),
-  );
-  return true;
-}
-
 export function WorktreeWorkspaceContextMenu({
   trigger,
+  finalFocusRef,
   target,
   actions,
   onAction,
@@ -213,7 +187,7 @@ export function WorktreeWorkspaceContextMenu({
           side="bottom"
           sideOffset={0}
           className="w-56 min-w-56"
-          finalFocus={triggerRef}
+          finalFocus={finalFocusRef ?? triggerRef}
         >
           {actionGroups.map((group, groupIndex) => (
             <MenuGroup key={group[0]}>
