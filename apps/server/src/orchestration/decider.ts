@@ -841,6 +841,91 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "workspace.archive.request": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (workspace.kind === "repository-root") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Repository root workspace '${workspace.id}' cannot be archived.`,
+        });
+      }
+      if (workspace.state !== "ready" || workspace.activeOperation !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${workspace.id}' cannot be archived while ${workspace.state}.`,
+        });
+      }
+      if (workspace.lifecycleGeneration !== command.expectedGeneration) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale archive request for workspace '${workspace.id}' was rejected.`,
+        });
+      }
+      const generation = workspace.lifecycleGeneration + 1;
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: workspace.id,
+          occurredAt: command.requestedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.archive-requested",
+        payload: {
+          workspaceId: workspace.id,
+          operationId: command.operationId,
+          generation,
+          confirmedWarnings: command.confirmedWarnings,
+          requestedAt: command.requestedAt,
+        },
+      };
+    }
+
+    case "workspace.restore.request": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (workspace.kind === "repository-root") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Repository root workspace '${workspace.id}' cannot be restored.`,
+        });
+      }
+      if (workspace.state !== "archived" || workspace.activeOperation !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${workspace.id}' cannot be restored while ${workspace.state}.`,
+        });
+      }
+      if (workspace.lifecycleGeneration !== command.expectedGeneration) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale restore request for workspace '${workspace.id}' was rejected.`,
+        });
+      }
+      const generation = workspace.lifecycleGeneration + 1;
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: workspace.id,
+          occurredAt: command.requestedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.restore-requested",
+        payload: {
+          workspaceId: workspace.id,
+          operationId: command.operationId,
+          generation,
+          requestedAt: command.requestedAt,
+        },
+      };
+    }
+
     case "thread.workspace.assign": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       const workspace = yield* requireWorkspace({
@@ -906,6 +991,78 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           headRef: command.headRef,
           targetResolvedCommit: command.targetResolvedCommit,
           createdFromCommit: command.createdFromCommit,
+          setupStatus: command.setupStatus,
+          completedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "workspace.archive.complete": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (
+        workspace.state !== "archiving" ||
+        workspace.activeOperation?.kind !== "archive" ||
+        workspace.activeOperation.id !== command.operationId ||
+        workspace.activeOperation.generation !== command.generation
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale archive completion for '${workspace.id}' was rejected.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: workspace.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.archived",
+        payload: {
+          workspaceId: workspace.id,
+          operationId: command.operationId,
+          generation: command.generation,
+          archivedAt: command.completedAt,
+        },
+      };
+    }
+
+    case "workspace.restore.complete": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (
+        workspace.state !== "provisioning" ||
+        workspace.activeOperation?.kind !== "restore" ||
+        workspace.activeOperation.id !== command.operationId ||
+        workspace.activeOperation.generation !== command.generation
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale restore completion for '${workspace.id}' was rejected.`,
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: workspace.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.restored",
+        payload: {
+          workspaceId: workspace.id,
+          operationId: command.operationId,
+          generation: command.generation,
+          path: command.path,
+          branch: command.branch,
+          headRef: command.headRef,
           setupStatus: command.setupStatus,
           completedAt: command.completedAt,
         },

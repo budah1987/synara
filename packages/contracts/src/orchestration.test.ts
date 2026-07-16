@@ -29,6 +29,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  WorkspaceLifecyclePreflightResult,
 } from "./orchestration";
 
 const decodeTurnDiffInput = Schema.decodeUnknownEffect(OrchestrationGetTurnDiffInput);
@@ -43,6 +44,9 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
+const decodeWorkspaceLifecyclePreflightResult = Schema.decodeUnknownEffect(
+  WorkspaceLifecyclePreflightResult,
+);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPayload);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
@@ -523,6 +527,59 @@ it.effect("decodes workspace pin metadata commands and events", () =>
     });
     assert.strictEqual(event.type, "workspace.meta-updated");
     assert.strictEqual(event.payload.isPinned, true);
+  }),
+);
+
+it.effect("decodes generation-fenced workspace lifecycle contracts", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "workspace.archive.request",
+      commandId: "cmd-workspace-archive",
+      workspaceId: "workspace-1",
+      operationId: "operation-archive-1",
+      expectedGeneration: 4,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "workspace.archive.request");
+    assert.strictEqual(command.confirmedWarnings, false);
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-archive",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.archive-requested",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-archive",
+      causationEventId: null,
+      correlationId: "cmd-workspace-archive",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        operationId: "operation-archive-1",
+        generation: 5,
+        confirmedWarnings: true,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "workspace.archive-requested");
+    assert.strictEqual(event.payload.generation, 5);
+
+    const preflight = yield* decodeWorkspaceLifecyclePreflightResult({
+      workspaceId: "workspace-1",
+      action: "archive",
+      lifecycleGeneration: 4,
+      canStart: true,
+      requiresConfirmation: true,
+      blockers: [],
+      warnings: [
+        {
+          code: "local-only-commits",
+          message: "This branch is local only.",
+        },
+      ],
+    });
+    assert.strictEqual(preflight.warnings[0]?.code, "local-only-commits");
   }),
 );
 

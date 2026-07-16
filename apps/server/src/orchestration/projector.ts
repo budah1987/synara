@@ -33,9 +33,12 @@ import {
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
   WorktreeWorkspaceCreatedPayload,
+  WorktreeWorkspaceArchivedPayload,
+  WorktreeWorkspaceLifecycleRequestedPayload,
   WorktreeWorkspaceMetaUpdatedPayload,
   WorktreeWorkspaceOperationFailedPayload,
   WorktreeWorkspaceReadyPayload,
+  WorktreeWorkspaceRestoredPayload,
   ThreadArchivedPayload,
   ThreadActivityAppendedPayload,
   ThreadCreatedPayload,
@@ -474,6 +477,103 @@ export function projectEvent(
         }),
       );
 
+    case "workspace.archive-requested":
+    case "workspace.restore-requested":
+      return decodeForEvent(
+        WorktreeWorkspaceLifecycleRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+            state: event.type === "workspace.archive-requested" ? "archiving" : "provisioning",
+            lifecycleGeneration: payload.generation,
+            activeOperation: {
+              id: payload.operationId,
+              generation: payload.generation,
+              kind: event.type === "workspace.archive-requested" ? "archive" : "restore",
+              stage:
+                event.type === "workspace.archive-requested" && payload.confirmedWarnings
+                  ? "intent-confirmed"
+                  : "intent-recorded",
+              startedAt: payload.requestedAt,
+            },
+            lastFailure: null,
+            updatedAt: payload.requestedAt,
+          }),
+        })),
+      );
+
+    case "workspace.archived":
+      return decodeForEvent(
+        WorktreeWorkspaceArchivedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+            state: "archived",
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: payload.archivedAt,
+            updatedAt: payload.archivedAt,
+          }),
+          threads: nextBase.threads.map((thread) =>
+            thread.workspaceId === payload.workspaceId
+              ? {
+                  ...thread,
+                  worktreePath: null,
+                  createBranchFlowCompleted: false,
+                  updatedAt: payload.archivedAt,
+                }
+              : thread,
+          ),
+        })),
+      );
+
+    case "workspace.restored":
+      return decodeForEvent(
+        WorktreeWorkspaceRestoredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
+            state: "ready",
+            path: payload.path,
+            branch: payload.branch,
+            headRef: payload.headRef,
+            setupStatus: payload.setupStatus,
+            setupError: null,
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: null,
+            updatedAt: payload.completedAt,
+          }),
+          threads: nextBase.threads.map((thread) =>
+            thread.workspaceId === payload.workspaceId
+              ? {
+                  ...thread,
+                  envMode: "worktree" as const,
+                  branch: payload.branch,
+                  worktreePath: payload.path,
+                  associatedWorktreePath: payload.path,
+                  associatedWorktreeBranch: payload.branch,
+                  associatedWorktreeRef: payload.headRef,
+                  createBranchFlowCompleted: true,
+                  updatedAt: payload.completedAt,
+                }
+              : thread,
+          ),
+        })),
+      );
+
     case "workspace.ready":
       return decodeForEvent(
         WorktreeWorkspaceReadyPayload,
@@ -524,14 +624,27 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
-            state: payload.kind === "setup" ? "setup-failed" : "error",
-            setupStatus: payload.kind === "setup" ? "failed" : "pending",
-            setupError: payload.kind === "setup" ? payload.summary : null,
-            path: payload.path ?? null,
-            branch: payload.branch ?? null,
-            headRef: payload.headRef ?? null,
-            targetResolvedCommit: payload.targetResolvedCommit ?? null,
-            createdFromCommit: payload.createdFromCommit ?? null,
+            state:
+              payload.kind === "setup"
+                ? "setup-failed"
+                : payload.kind === "archive"
+                  ? "ready"
+                  : payload.kind === "restore"
+                    ? "archived"
+                    : "error",
+            ...(payload.kind === "setup"
+              ? { setupStatus: "failed" as const, setupError: payload.summary }
+              : payload.kind === "provision"
+                ? {
+                    setupStatus: "pending" as const,
+                    setupError: null,
+                    path: payload.path ?? null,
+                    branch: payload.branch ?? null,
+                    headRef: payload.headRef ?? null,
+                    targetResolvedCommit: payload.targetResolvedCommit ?? null,
+                    createdFromCommit: payload.createdFromCommit ?? null,
+                  }
+                : {}),
             activeOperation: null,
             lastFailure: {
               generation: payload.generation,

@@ -31,6 +31,7 @@ import {
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
+  WorkspaceLifecyclePreflightInput,
 } from "./orchestration";
 import {
   GitActionProgressEvent,
@@ -283,6 +284,10 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(
     ORCHESTRATION_WS_METHODS.dispatchCommand,
     Schema.Struct({ command: ClientOrchestrationCommand }),
+  ),
+  tagRequestBody(
+    ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight,
+    WorkspaceLifecyclePreflightInput,
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.getSnapshot, OrchestrationGetSnapshotInput),

@@ -712,6 +712,8 @@ export function createWsNativeApi(): NativeApi {
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
       getWorkspaceShellSnapshot: () =>
         transport.request(ORCHESTRATION_WS_METHODS.getWorkspaceShellSnapshot),
+      getWorkspaceLifecyclePreflight: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight, input),
       dispatchCommand: (command) => {
         return transport.request(ORCHESTRATION_WS_METHODS.dispatchCommand, {
           command: omitNullUserInputAnswers(command),

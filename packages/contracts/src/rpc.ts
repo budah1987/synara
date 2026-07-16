@@ -202,6 +202,15 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationGetWorkspaceLifecyclePreflightRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight,
+  {
+    payload: OrchestrationRpcSchemas.getWorkspaceLifecyclePreflight.input,
+    success: OrchestrationRpcSchemas.getWorkspaceLifecyclePreflight.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsOrchestrationImportThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importThread, {
   payload: OrchestrationImportThreadInput,
   success: OrchestrationImportThreadResult,
@@ -958,6 +967,7 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
 
 export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationGetWorkspaceLifecyclePreflightRpc,
   WsOrchestrationImportThreadRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,

@@ -55,6 +55,7 @@ import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
+import { getWorkspaceLifecyclePreflight } from "./orchestration/workspaceLifecyclePreflight";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
@@ -608,6 +609,33 @@ export const makeWsRpcLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const requireWorkspaceReadyForRuntime = (input: {
+        readonly threadId?: string;
+        readonly workspaceId?: string | null;
+      }) =>
+        orchestrationEngine.getReadModel().pipe(
+          Effect.flatMap((readModel) => {
+            const workspaceId =
+              input.workspaceId ??
+              (input.threadId
+                ? readModel.threads.find((thread) => thread.id === input.threadId)?.workspaceId
+                : null);
+            if (!workspaceId) return Effect.void;
+            const workspace = (readModel.workspaces ?? []).find(
+              (candidate) => candidate.id === workspaceId,
+            );
+            return workspace?.state === "ready"
+              ? Effect.void
+              : Effect.fail(
+                  new Error(
+                    workspace
+                      ? `Workspace '${workspace.title}' cannot start a runtime while ${workspace.state}.`
+                      : "The workspace is unavailable.",
+                  ),
+                );
+          }),
+        );
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
@@ -626,6 +654,22 @@ export const makeWsRpcLayer = () =>
               return result;
             }),
             "Failed to dispatch orchestration command",
+          ),
+        [ORCHESTRATION_WS_METHODS.getWorkspaceLifecyclePreflight]: (input) =>
+          rpcEffect(
+            orchestrationEngine.getReadModel().pipe(
+              Effect.flatMap((readModel) =>
+                getWorkspaceLifecyclePreflight({
+                  readModel,
+                  input,
+                  git,
+                  fileSystem,
+                  devServerManager,
+                  terminalManager,
+                }),
+              ),
+            ),
+            "Failed to inspect workspace lifecycle safety",
           ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
           rpcEffect(importThread(input), "Failed to import thread"),
@@ -797,7 +841,12 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.projectsWriteFile]: (input) =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
         [WS_METHODS.projectsRunDevServer]: (input) =>
-          rpcEffect(devServerManager.run(input), "Failed to start dev server"),
+          rpcEffect(
+            requireWorkspaceReadyForRuntime({ workspaceId: input.workspaceId }).pipe(
+              Effect.andThen(devServerManager.run(input)),
+            ),
+            "Failed to start dev server",
+          ),
         [WS_METHODS.projectsStopDevServer]: (input) =>
           rpcEffect(devServerManager.stop(input), "Failed to stop dev server"),
         [WS_METHODS.projectsListDevServers]: () =>
@@ -1123,7 +1172,10 @@ export const makeWsRpcLayer = () =>
 
         [WS_METHODS.terminalOpen]: (input) =>
           rpcEffect(
-            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+            requireWorkspaceReadyForRuntime({ threadId: input.threadId }).pipe(
+              Effect.andThen(
+                resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID),
+              ),
               Effect.andThen(terminalManager.open(input)),
             ),
             "Failed to open terminal",
@@ -1149,7 +1201,10 @@ export const makeWsRpcLayer = () =>
           rpcEffect(terminalManager.clear(input), "Failed to clear terminal"),
         [WS_METHODS.terminalRestart]: (input) =>
           rpcEffect(
-            resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID).pipe(
+            requireWorkspaceReadyForRuntime({ threadId: input.threadId }).pipe(
+              Effect.andThen(
+                resetTerminalTitleBuffer(input.threadId, input.terminalId ?? DEFAULT_TERMINAL_ID),
+              ),
               Effect.andThen(terminalManager.restart(input)),
             ),
             "Failed to restart terminal",

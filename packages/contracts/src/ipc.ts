@@ -172,6 +172,8 @@ import type {
   OrchestrationWorkspaceShellStreamItem,
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
+  WorkspaceLifecyclePreflightInput,
+  WorkspaceLifecyclePreflightResult,
 } from "./orchestration";
 import { EditorId } from "./editor";
 import type { ThreadId } from "./baseSchemas";
@@ -669,6 +671,9 @@ export interface NativeApi {
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
     getWorkspaceShellSnapshot: () => Promise<OrchestrationWorkspaceShellSnapshot>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
+    getWorkspaceLifecyclePreflight: (
+      input: WorkspaceLifecyclePreflightInput,
+    ) => Promise<WorkspaceLifecyclePreflightResult>;
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;

@@ -181,6 +181,10 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
 const WORKSPACE_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "workspace.created",
   "workspace.meta-updated",
+  "workspace.archive-requested",
+  "workspace.archived",
+  "workspace.restore-requested",
+  "workspace.restored",
   "workspace.ready",
   "workspace.operation-failed",
 ]);
@@ -730,6 +734,102 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "workspace.archive-requested":
+        case "workspace.restore-requested": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: event.type === "workspace.archive-requested" ? "archiving" : "provisioning",
+            lifecycleGeneration: event.payload.generation,
+            activeOperation: {
+              id: event.payload.operationId,
+              generation: event.payload.generation,
+              kind: event.type === "workspace.archive-requested" ? "archive" : "restore",
+              stage:
+                event.type === "workspace.archive-requested" && event.payload.confirmedWarnings
+                  ? "intent-confirmed"
+                  : "intent-recorded",
+              startedAt: event.payload.requestedAt,
+            },
+            lastFailure: null,
+            updatedAt: event.payload.requestedAt,
+          });
+          return;
+        }
+
+        case "workspace.archived": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: "archived",
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: event.payload.archivedAt,
+            updatedAt: event.payload.archivedAt,
+          });
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                worktreePath: null,
+                createBranchFlowCompleted: false,
+                updatedAt: event.payload.archivedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "workspace.restored": {
+          const existing = yield* projectionWorktreeWorkspaceRepository.getById({
+            workspaceId: event.payload.workspaceId,
+          });
+          if (Option.isNone(existing)) return;
+          yield* projectionWorktreeWorkspaceRepository.upsert({
+            ...existing.value,
+            state: "ready",
+            path: event.payload.path,
+            branch: event.payload.branch,
+            headRef: event.payload.headRef,
+            setupStatus: event.payload.setupStatus,
+            setupError: null,
+            activeOperation: null,
+            lastFailure: null,
+            archivedAt: null,
+            updatedAt: event.payload.completedAt,
+          });
+          const workspaceThreads = yield* projectionThreadRepository.listByProjectId({
+            projectId: existing.value.projectId,
+          });
+          yield* Effect.forEach(
+            workspaceThreads.filter((thread) => thread.workspaceId === event.payload.workspaceId),
+            (thread) =>
+              projectionThreadRepository.upsert({
+                ...thread,
+                envMode: "worktree",
+                branch: event.payload.branch,
+                worktreePath: event.payload.path,
+                associatedWorktreePath: event.payload.path,
+                associatedWorktreeBranch: event.payload.branch,
+                associatedWorktreeRef: event.payload.headRef,
+                createBranchFlowCompleted: true,
+                updatedAt: event.payload.completedAt,
+              }),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
         case "workspace.ready": {
           const existing = yield* projectionWorktreeWorkspaceRepository.getById({
             workspaceId: event.payload.workspaceId,
@@ -778,14 +878,27 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existing)) return;
           yield* projectionWorktreeWorkspaceRepository.upsert({
             ...existing.value,
-            state: event.payload.kind === "setup" ? "setup-failed" : "error",
-            setupStatus: event.payload.kind === "setup" ? "failed" : "pending",
-            setupError: event.payload.kind === "setup" ? event.payload.summary : null,
-            path: event.payload.path ?? null,
-            branch: event.payload.branch ?? null,
-            headRef: event.payload.headRef ?? null,
-            targetResolvedCommit: event.payload.targetResolvedCommit ?? null,
-            createdFromCommit: event.payload.createdFromCommit ?? null,
+            state:
+              event.payload.kind === "setup"
+                ? "setup-failed"
+                : event.payload.kind === "archive"
+                  ? "ready"
+                  : event.payload.kind === "restore"
+                    ? "archived"
+                    : "error",
+            ...(event.payload.kind === "setup"
+              ? { setupStatus: "failed" as const, setupError: event.payload.summary }
+              : event.payload.kind === "provision"
+                ? {
+                    setupStatus: "pending" as const,
+                    setupError: null,
+                    path: event.payload.path ?? null,
+                    branch: event.payload.branch ?? null,
+                    headRef: event.payload.headRef ?? null,
+                    targetResolvedCommit: event.payload.targetResolvedCommit ?? null,
+                    createdFromCommit: event.payload.createdFromCommit ?? null,
+                  }
+                : {}),
             activeOperation: null,
             lastFailure: {
               generation: event.payload.generation,

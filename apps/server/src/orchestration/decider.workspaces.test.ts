@@ -488,4 +488,209 @@ describe("worktree workspace commands", () => {
       ),
     ).rejects.toThrow(/Stale workspace completion/);
   });
+
+  it("fences archive and restore transitions while retaining workspace metadata", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-lifecycle");
+    const provisionOperationId = WorkspaceOperationId.makeUnsafe("workspace-lifecycle-provision");
+    const created = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.create",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-create"),
+          workspaceId,
+          threadId: ThreadId.makeUnsafe("workspace-lifecycle-thread"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          operationId: provisionOperationId,
+          title: "Lifecycle workspace",
+          targetRef: "main",
+          branch: "synara/lifecycle",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    let readModel = await apply(initial, Array.isArray(created) ? created : [created]);
+    const ready = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.provision.complete",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-ready"),
+          workspaceId,
+          operationId: provisionOperationId,
+          generation: 1,
+          path: "/tmp/workspace-lifecycle",
+          branch: "synara/lifecycle",
+          headRef: "abc123",
+          targetResolvedCommit: "abc123",
+          createdFromCommit: "abc123",
+          setupStatus: "skipped",
+          completedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(ready) ? ready : [ready]);
+
+    const archiveOperationId = WorkspaceOperationId.makeUnsafe("workspace-lifecycle-archive");
+    const archiveRequested = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.archive.request",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-archive-request"),
+          workspaceId,
+          operationId: archiveOperationId,
+          expectedGeneration: 1,
+          confirmedWarnings: true,
+          requestedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(
+      readModel,
+      Array.isArray(archiveRequested) ? archiveRequested : [archiveRequested],
+    );
+    expect(readModel.workspaces[0]).toMatchObject({
+      state: "archiving",
+      lifecycleGeneration: 2,
+      path: "/tmp/workspace-lifecycle",
+      activeOperation: { kind: "archive", stage: "intent-confirmed" },
+    });
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "workspace.archive.complete",
+            commandId: CommandId.makeUnsafe("workspace-lifecycle-stale-archive"),
+            workspaceId,
+            operationId: archiveOperationId,
+            generation: 1,
+            completedAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Stale archive completion/);
+
+    const archived = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.archive.complete",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-archived"),
+          workspaceId,
+          operationId: archiveOperationId,
+          generation: 2,
+          completedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(archived) ? archived : [archived]);
+    expect(readModel.workspaces[0]).toMatchObject({
+      state: "archived",
+      path: "/tmp/workspace-lifecycle",
+      branch: "synara/lifecycle",
+      archivedAt: now,
+    });
+    expect(readModel.threads[0]?.worktreePath).toBeNull();
+
+    const restoreOperationId = WorkspaceOperationId.makeUnsafe("workspace-lifecycle-restore");
+    const restoreRequested = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.restore.request",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-restore-request"),
+          workspaceId,
+          operationId: restoreOperationId,
+          expectedGeneration: 2,
+          requestedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(
+      readModel,
+      Array.isArray(restoreRequested) ? restoreRequested : [restoreRequested],
+    );
+    const restored = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.restore.complete",
+          commandId: CommandId.makeUnsafe("workspace-lifecycle-restored"),
+          workspaceId,
+          operationId: restoreOperationId,
+          generation: 3,
+          path: "/tmp/workspace-lifecycle",
+          branch: "synara/lifecycle",
+          headRef: "def456",
+          setupStatus: "skipped",
+          completedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(restored) ? restored : [restored]);
+    expect(readModel.workspaces[0]).toMatchObject({
+      state: "ready",
+      lifecycleGeneration: 3,
+      archivedAt: null,
+      headRef: "def456",
+    });
+    expect(readModel.threads[0]).toMatchObject({
+      worktreePath: "/tmp/workspace-lifecycle",
+      associatedWorktreeRef: "def456",
+      createBranchFlowCompleted: true,
+    });
+  });
+
+  it("does not allow the repository root workspace to enter archive lifecycle", async () => {
+    const now = new Date().toISOString();
+    const readModel = await repositoryProject(now);
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-root-lifecycle");
+    const imported = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.import-legacy",
+          commandId: CommandId.makeUnsafe("workspace-root-lifecycle-import"),
+          workspaceId,
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          repositoryIdentity: "repo:workspace-project",
+          kind: "repository-root",
+          state: "ready",
+          title: "Repository root",
+          path: "/tmp/workspace-project",
+          branch: "main",
+          headRef: "abc123",
+          targetRef: "main",
+          targetResolvedCommit: "abc123",
+          createdFromCommit: "abc123",
+          setupStatus: "skipped",
+          createdAt: now,
+        },
+      }),
+    );
+    const withRoot = await apply(readModel, Array.isArray(imported) ? imported : [imported]);
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: withRoot,
+          command: {
+            type: "workspace.archive.request",
+            commandId: CommandId.makeUnsafe("workspace-root-lifecycle-archive"),
+            workspaceId,
+            operationId: WorkspaceOperationId.makeUnsafe("workspace-root-lifecycle-operation"),
+            expectedGeneration: 0,
+            requestedAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Repository root workspace/);
+  });
 });

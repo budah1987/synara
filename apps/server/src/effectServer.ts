@@ -135,7 +135,6 @@ export const createEffectServer = Effect.fn(function* () {
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
-  yield* Scope.provide(worktreeWorkspaceReactor.start, subscriptionsScope);
   yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
@@ -146,6 +145,9 @@ export const createEffectServer = Effect.fn(function* () {
   // died, so they can never complete on their own) before clients can observe
   // the stale "Working" state.
   yield* reconcileRestartStuckTurns;
+  // Lifecycle recovery performs destructive-safety preflight. Resume it only
+  // after stale provider turns have reached their authoritative restart state.
+  yield* Scope.provide(worktreeWorkspaceReactor.start, subscriptionsScope);
   yield* runtimeStartup.markCommandReady;
 
   yield* lifecycleEvents.publish({

@@ -19,7 +19,9 @@ import { Effect, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
+import { DevServerManager, type DevServerManagerShape } from "../../devServerManager";
 import { GitCoreLive } from "../../git/Layers/GitCore";
+import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { decideOrchestrationCommand } from "../decider";
 import { projectEvent } from "../projector";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
@@ -28,6 +30,27 @@ import {
   resolveWorkspaceBranchProvisioning,
   WorktreeWorkspaceReactorLive,
 } from "./WorktreeWorkspaceReactor";
+
+const runtimeSafetyLayer = Layer.merge(
+  Layer.succeed(DevServerManager, {
+    list: Effect.succeed({ servers: [] }),
+    stream: Stream.empty,
+    run: () => Effect.die("unused dev-server run"),
+    stop: () => Effect.succeed({ stopped: false }),
+  } satisfies DevServerManagerShape),
+  Layer.succeed(TerminalManager, {
+    hasRunningSessionForThreadIds: () => Effect.succeed(false),
+    open: () => Effect.die("unused terminal open"),
+    write: () => Effect.die("unused terminal write"),
+    ackOutput: () => Effect.die("unused terminal ack"),
+    resize: () => Effect.die("unused terminal resize"),
+    clear: () => Effect.die("unused terminal clear"),
+    restart: () => Effect.die("unused terminal restart"),
+    close: () => Effect.die("unused terminal close"),
+    subscribe: () => Effect.succeed(() => undefined),
+    dispose: Effect.void,
+  } satisfies TerminalManagerShape),
+);
 
 describe("resolveWorkspaceBranchProvisioning", () => {
   it("checks out a free local branch without changing its identity", () => {
@@ -205,6 +228,7 @@ describe("WorktreeWorkspaceReactor", () => {
       );
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -385,6 +409,7 @@ describe("WorktreeWorkspaceReactor", () => {
       );
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -531,6 +556,7 @@ describe("WorktreeWorkspaceReactor", () => {
       );
       const layer = WorktreeWorkspaceReactorLive.pipe(
         Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
         Layer.provideMerge(gitLayer),
         Layer.provideMerge(configLayer),
         Layer.provideMerge(NodeServices.layer),
@@ -563,6 +589,194 @@ describe("WorktreeWorkspaceReactor", () => {
         throw new Error("Expected workspace completion command");
       }
       expect(existsSync(join(completion.path, "feature.txt"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("archives a clean managed worktree without deleting its branch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-archive-reactor-"));
+    try {
+      const repository = join(root, "repository");
+      const worktreePath = join(root, "managed-worktree");
+      execFileSync("git", ["init", "-b", "main", repository]);
+      execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", repository, "config", "user.name", "Synara Test"]);
+      execFileSync("sh", ["-c", "printf base > fixture.txt"], { cwd: repository });
+      execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
+      execFileSync("git", ["-C", repository, "commit", "-m", "base"]);
+      execFileSync("git", [
+        "-C",
+        repository,
+        "worktree",
+        "add",
+        "-b",
+        "feature/archive-me",
+        worktreePath,
+        "main",
+      ]);
+      const head = execFileSync("git", ["-C", worktreePath, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      const now = new Date().toISOString();
+      const projectId = ProjectId.makeUnsafe("project-archive-reactor");
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-archive-reactor");
+      const operationId = WorkspaceOperationId.makeUnsafe("operation-archive-reactor");
+      const readModel: OrchestrationReadModel = {
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project",
+            title: "Archive project",
+            workspaceRoot: repository,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: false,
+            repositoryIdentity: repository,
+            defaultTargetRef: "main",
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: null,
+          },
+        ],
+        workspaces: [
+          {
+            id: workspaceId,
+            projectId,
+            repositoryIdentity: repository,
+            kind: "managed",
+            state: "archiving",
+            title: "Archive me",
+            path: worktreePath,
+            branch: "feature/archive-me",
+            headRef: head,
+            targetRef: "main",
+            targetResolvedCommit: head,
+            createdFromCommit: head,
+            sourceKind: "new-branch",
+            sourceRef: "main",
+            setupStatus: "skipped",
+            setupError: null,
+            setupLogId: null,
+            lastKnownPr: null,
+            isPinned: false,
+            lifecycleGeneration: 2,
+            activeOperation: {
+              id: operationId,
+              generation: 2,
+              kind: "archive",
+              stage: "intent-confirmed",
+              startedAt: now,
+            },
+            lastFailure: null,
+            mutationRevision: 0,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            deletedAt: null,
+          },
+        ],
+        threads: [],
+        updatedAt: now,
+      };
+      const commands: OrchestrationCommand[] = [];
+      const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        getReadModel: () => Effect.succeed(readModel),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length + 1 };
+          }),
+        repairState: () => Effect.succeed(readModel),
+        refreshCommandReadModel: () => Effect.succeed(readModel),
+        streamDomainEvents: Stream.empty,
+      });
+      const configLayer = ServerConfig.layerTest(repository, root);
+      const gitLayer = GitCoreLive.pipe(
+        Layer.provide(configLayer),
+        Layer.provide(NodeServices.layer),
+      );
+      const layer = WorktreeWorkspaceReactorLive.pipe(
+        Layer.provideMerge(engineLayer),
+        Layer.provideMerge(runtimeSafetyLayer),
+        Layer.provideMerge(gitLayer),
+        Layer.provideMerge(configLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* (yield* WorktreeWorkspaceReactor).start;
+            for (let attempt = 0; attempt < 80 && commands.length === 0; attempt += 1) {
+              yield* Effect.sleep(25);
+            }
+          }),
+        ).pipe(Effect.provide(layer)),
+      );
+
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          type: "workspace.archive.complete",
+          workspaceId,
+          operationId,
+          generation: 2,
+        }),
+      );
+      expect(existsSync(worktreePath)).toBe(false);
+      expect(
+        execFileSync("git", [
+          "-C",
+          repository,
+          "show-ref",
+          "--verify",
+          "--quiet",
+          "refs/heads/feature/archive-me",
+        ]),
+      ).toBeDefined();
+
+      const restoreOperationId = WorkspaceOperationId.makeUnsafe("operation-restore-reactor");
+      const archivedWorkspace = readModel.workspaces[0]!;
+      readModel.workspaces[0] = {
+        ...archivedWorkspace,
+        state: "provisioning",
+        lifecycleGeneration: 3,
+        activeOperation: {
+          id: restoreOperationId,
+          generation: 3,
+          kind: "restore",
+          stage: "intent-recorded",
+          startedAt: now,
+        },
+        archivedAt: now,
+      };
+      commands.length = 0;
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* (yield* WorktreeWorkspaceReactor).start;
+            for (let attempt = 0; attempt < 80 && commands.length === 0; attempt += 1) {
+              yield* Effect.sleep(25);
+            }
+          }),
+        ).pipe(Effect.provide(layer)),
+      );
+
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          type: "workspace.restore.complete",
+          workspaceId,
+          operationId: restoreOperationId,
+          generation: 3,
+          path: worktreePath,
+          branch: "feature/archive-me",
+          headRef: head,
+        }),
+      );
+      expect(existsSync(worktreePath)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

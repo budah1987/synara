@@ -11,14 +11,17 @@ import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import { Cause, Effect, FileSystem, Layer, Path, Stream } from "effect";
 
 import { ServerConfig } from "../../config";
+import { DevServerManager } from "../../devServerManager";
 import { GitCore } from "../../git/Services/GitCore";
+import { TerminalManager } from "../../terminal/Services/Manager";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
+import { getWorkspaceLifecyclePreflight } from "../workspaceLifecyclePreflight";
 import {
   WorktreeWorkspaceReactor,
   type WorktreeWorkspaceReactorShape,
 } from "../Services/WorktreeWorkspaceReactor";
 
-interface ProvisionRequest {
+interface WorkspaceRequest {
   readonly workspaceId: WorktreeWorkspaceId;
   readonly projectId: ProjectId;
 }
@@ -88,6 +91,8 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const git = yield* GitCore;
+  const devServerManager = yield* DevServerManager;
+  const terminalManager = yield* TerminalManager;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const path = yield* Path.Path;
   const processing = new Set<string>();
@@ -214,7 +219,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     ),
   );
 
-  const provision = Effect.fn(function* (request: ProvisionRequest) {
+  const provision = Effect.fn(function* (request: WorkspaceRequest) {
     const readModel = yield* orchestrationEngine.getReadModel();
     const workspace = (readModel.workspaces ?? []).find(
       (candidate) => candidate.id === request.workspaceId,
@@ -397,13 +402,257 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     }).pipe(Effect.catch(fail));
   });
 
-  const processRequest = (request: ProvisionRequest) =>
-    provision(request).pipe(
+  const lifecycleFailure = (input: {
+    workspace: OrchestrationWorktreeWorkspace;
+    stage: string;
+    cause: unknown;
+  }) => {
+    const operation = input.workspace.activeOperation;
+    if (!operation) return Effect.void;
+    return orchestrationEngine
+      .dispatch({
+        type: "workspace.operation.fail",
+        commandId: commandId(`${operation.kind}-failed`, String(input.workspace.id)),
+        workspaceId: input.workspace.id,
+        operationId: operation.id,
+        generation: operation.generation,
+        kind: operation.kind,
+        stage: input.stage,
+        summary: errorSummary(input.cause),
+        logId: null,
+        failedAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.asVoid,
+        Effect.catchCause((dispatchCause) =>
+          Effect.logWarning("failed to record workspace lifecycle failure", {
+            workspaceId: input.workspace.id,
+            operation: operation.kind,
+            cause: Cause.pretty(dispatchCause),
+          }),
+        ),
+      );
+  };
+
+  const archive = Effect.fn(function* (request: WorkspaceRequest) {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const workspace = (readModel.workspaces ?? []).find(
+      (candidate) => candidate.id === request.workspaceId,
+    );
+    const project = readModel.projects.find((candidate) => candidate.id === request.projectId);
+    if (
+      !workspace ||
+      !project ||
+      workspace.state !== "archiving" ||
+      workspace.activeOperation?.kind !== "archive"
+    ) {
+      return;
+    }
+    const operation = workspace.activeOperation;
+    let stage = "preflight";
+    yield* Effect.gen(function* () {
+      const preflight = yield* getWorkspaceLifecyclePreflight({
+        readModel,
+        input: { workspaceId: workspace.id, action: "archive" },
+        git,
+        fileSystem,
+        devServerManager,
+        terminalManager,
+        inFlightOperationId: String(operation.id),
+      });
+      if (!preflight.canStart) {
+        return yield* Effect.fail(
+          new Error(preflight.blockers.map((blocker) => blocker.message).join(" ")),
+        );
+      }
+      if (preflight.requiresConfirmation && operation.stage !== "intent-confirmed") {
+        return yield* Effect.fail(
+          new Error(preflight.warnings.map((warning) => warning.message).join(" ")),
+        );
+      }
+
+      if (workspace.kind === "managed" && workspace.path) {
+        stage = "remove-worktree";
+        if (yield* fileSystem.exists(workspace.path)) {
+          // Deliberately omit force: Git remains the final dirty-worktree safeguard.
+          yield* git.removeWorktree({ cwd: project.workspaceRoot, path: workspace.path });
+        }
+      } else if (workspace.kind !== "external") {
+        return yield* Effect.fail(
+          new Error(`Workspace kind '${workspace.kind}' cannot be archived.`),
+        );
+      }
+
+      stage = "commit-completion";
+      yield* orchestrationEngine.dispatch({
+        type: "workspace.archive.complete",
+        commandId: commandId("archive-complete", String(workspace.id)),
+        workspaceId: workspace.id,
+        operationId: operation.id,
+        generation: operation.generation,
+        completedAt: new Date().toISOString(),
+      });
+    }).pipe(
+      Effect.catch((cause) =>
+        stage === "commit-completion"
+          ? Effect.logWarning("workspace archive completion dispatch failed; recovery remains pending", {
+              workspaceId: workspace.id,
+              cause: errorSummary(cause),
+            })
+          : lifecycleFailure({ workspace, stage, cause }),
+      ),
+    );
+  });
+
+  const restoreWorkspace = Effect.fn(function* (request: WorkspaceRequest) {
+    const readModel = yield* orchestrationEngine.getReadModel();
+    const workspace = (readModel.workspaces ?? []).find(
+      (candidate) => candidate.id === request.workspaceId,
+    );
+    const project = readModel.projects.find((candidate) => candidate.id === request.projectId);
+    if (
+      !workspace ||
+      !project ||
+      workspace.state !== "provisioning" ||
+      workspace.activeOperation?.kind !== "restore"
+    ) {
+      return;
+    }
+    const operation = workspace.activeOperation;
+    let stage = "preflight";
+    yield* Effect.gen(function* () {
+      const preflight = yield* getWorkspaceLifecyclePreflight({
+        readModel,
+        input: { workspaceId: workspace.id, action: "restore" },
+        git,
+        fileSystem,
+        devServerManager,
+        terminalManager,
+        inFlightOperationId: String(operation.id),
+      });
+      if (!preflight.canStart) {
+        return yield* Effect.fail(
+          new Error(preflight.blockers.map((blocker) => blocker.message).join(" ")),
+        );
+      }
+      if (!workspace.path || !workspace.branch) {
+        return yield* Effect.fail(new Error("Archived workspace metadata is incomplete."));
+      }
+
+      let restoredPath = workspace.path;
+      let restoredBranch = workspace.branch;
+      let restoredHead = workspace.headRef;
+      let setupStatus: "succeeded" | "skipped" = "skipped";
+
+      if (workspace.kind === "managed") {
+        stage = "create-worktree";
+        if (yield* fileSystem.exists(workspace.path)) {
+          const actualBranch = (
+            yield* git.execute({
+              operation: "WorktreeWorkspaceReactor.restoreExistingBranch",
+              cwd: workspace.path,
+              args: ["branch", "--show-current"],
+            })
+          ).stdout.trim();
+          if (actualBranch !== workspace.branch) {
+            return yield* Effect.fail(
+              new Error(`The occupied workspace path uses branch '${actualBranch || "detached HEAD"}'.`),
+            );
+          }
+        } else {
+          yield* fileSystem.makeDirectory(path.dirname(workspace.path), { recursive: true });
+          const result = yield* git.createWorktree({
+            cwd: project.workspaceRoot,
+            branch: workspace.branch,
+            path: workspace.path,
+          });
+          restoredPath = result.worktree.path;
+          restoredBranch = result.worktree.branch;
+        }
+        restoredHead = (
+          yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.restoreHead",
+            cwd: restoredPath,
+            args: ["rev-parse", "HEAD"],
+          })
+        ).stdout.trim();
+
+        stage = "setup";
+        const setupScripts = project.scripts.filter((script) => script.runOnWorktreeCreate);
+        for (const script of setupScripts) {
+          yield* runSetupCommand(script.command, restoredPath);
+        }
+        setupStatus = setupScripts.length > 0 ? "succeeded" : "skipped";
+      } else if (workspace.kind === "external") {
+        stage = "verify-external";
+        restoredHead = (
+          yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.restoreExternalHead",
+            cwd: restoredPath,
+            args: ["rev-parse", "HEAD"],
+          })
+        ).stdout.trim();
+        restoredBranch = (
+          yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.restoreExternalBranch",
+            cwd: restoredPath,
+            args: ["branch", "--show-current"],
+          })
+        ).stdout.trim();
+      } else {
+        return yield* Effect.fail(
+          new Error(`Workspace kind '${workspace.kind}' cannot be restored.`),
+        );
+      }
+
+      if (!restoredPath || !restoredBranch || !restoredHead) {
+        return yield* Effect.fail(new Error("Workspace restore returned incomplete metadata."));
+      }
+      stage = "commit-completion";
+      yield* orchestrationEngine.dispatch({
+        type: "workspace.restore.complete",
+        commandId: commandId("restore-complete", String(workspace.id)),
+        workspaceId: workspace.id,
+        operationId: operation.id,
+        generation: operation.generation,
+        path: restoredPath,
+        branch: restoredBranch,
+        headRef: restoredHead,
+        setupStatus,
+        completedAt: new Date().toISOString(),
+      });
+    }).pipe(
+      Effect.catch((cause) =>
+        stage === "commit-completion"
+          ? Effect.logWarning("workspace restore completion dispatch failed; recovery remains pending", {
+              workspaceId: workspace.id,
+              cause: errorSummary(cause),
+            })
+          : lifecycleFailure({ workspace, stage, cause }),
+      ),
+    );
+  });
+
+  const processRequest = (request: WorkspaceRequest) =>
+    orchestrationEngine.getReadModel().pipe(
+      Effect.flatMap((readModel) => {
+        const workspace = (readModel.workspaces ?? []).find(
+          (candidate) => candidate.id === request.workspaceId,
+        );
+        switch (workspace?.activeOperation?.kind) {
+          case "archive":
+            return archive(request);
+          case "restore":
+            return restoreWorkspace(request);
+          default:
+            return provision(request);
+        }
+      }),
       Effect.ensuring(Effect.sync(() => processing.delete(String(request.workspaceId)))),
     );
   const worker = yield* makeDrainableWorker(processRequest);
 
-  const enqueue = (request: ProvisionRequest) => {
+  const enqueue = (request: WorkspaceRequest) => {
     const id = String(request.workspaceId);
     if (processing.has(id)) return Effect.void;
     processing.add(id);
@@ -418,7 +667,19 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
               workspaceId: event.payload.workspaceId,
               projectId: event.payload.projectId,
             })
-          : Effect.void,
+          : event.type === "workspace.archive-requested" ||
+              event.type === "workspace.restore-requested"
+            ? orchestrationEngine.getReadModel().pipe(
+                Effect.flatMap((readModel) => {
+                  const workspace = (readModel.workspaces ?? []).find(
+                    (candidate) => candidate.id === event.payload.workspaceId,
+                  );
+                  return workspace
+                    ? enqueue({ workspaceId: workspace.id, projectId: workspace.projectId })
+                    : Effect.void;
+                }),
+              )
+            : Effect.void,
       ),
     );
 
@@ -427,9 +688,10 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     const snapshot = yield* orchestrationEngine.getReadModel();
     for (const workspace of snapshot.workspaces ?? []) {
       if (
-        workspace.kind === "managed" &&
-        workspace.state === "provisioning" &&
-        workspace.activeOperation !== null
+        workspace.activeOperation !== null &&
+        ((workspace.kind === "managed" && workspace.activeOperation.kind === "provision") ||
+          workspace.activeOperation.kind === "archive" ||
+          workspace.activeOperation.kind === "restore")
       ) {
         yield* enqueue({
           workspaceId: workspace.id,
