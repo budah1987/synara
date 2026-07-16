@@ -107,6 +107,7 @@ import { formatRelativeTime } from "../lib/relativeTime";
 import { readEditorRailActiveChat } from "../editorViewState";
 import { openInPreferredEditor } from "../editorPreferences";
 import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
+import { requestWorkspaceArchive, requestWorkspaceRestore } from "../lib/workspaceLifecycle";
 import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
   reconcileDeletedThreadFromClient,
@@ -194,6 +195,8 @@ import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
+import { ArchivedWorkspacesDialog } from "./ArchivedWorkspacesDialog";
+import { listArchivedWorkspaces } from "./archivedWorkspaces.logic";
 import {
   ProjectContextMenu,
   type ProjectContextMenuActionId,
@@ -1589,6 +1592,16 @@ export default function Sidebar() {
   const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
+  const [archivedWorkspacesProjectId, setArchivedWorkspacesProjectId] =
+    useState<ProjectId | null>(null);
+  const [restoringWorkspaceIds, setRestoringWorkspaceIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [restoreErrorsByWorkspaceId, setRestoreErrorsByWorkspaceId] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  const [restoreWorkspaceIdToOpen, setRestoreWorkspaceIdToOpen] =
+    useState<WorktreeWorkspaceId | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
   const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
     ReadonlyMap<string, number>
@@ -4518,6 +4531,100 @@ export default function Sidebar() {
     [],
   );
 
+  const handleArchiveWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const result = await requestWorkspaceArchive({ api, workspace });
+      if (result === "cancelled") return;
+      syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      toastManager.add({
+        type: "success",
+        title:
+          workspace.kind === "external" ? "Removing external workspace" : "Archiving workspace",
+        description:
+          workspace.kind === "external"
+            ? "The folder and its files will remain on disk."
+            : "The branch, pull request, conversations, and history will be retained.",
+      });
+    },
+    [syncServerWorkspaceShellSnapshot],
+  );
+
+  const handleRestoreWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      const api = readNativeApi();
+      if (!api) return;
+      await requestWorkspaceRestore({ api, workspace });
+      syncServerWorkspaceShellSnapshot(await api.orchestration.getWorkspaceShellSnapshot());
+      toastManager.add({
+        type: "success",
+        title: "Restoring workspace",
+        description: "Synara will reopen the workspace when its local path is ready.",
+      });
+    },
+    [syncServerWorkspaceShellSnapshot],
+  );
+
+  const handleRestoreArchivedWorkspace = useCallback(
+    async (workspace: OrchestrationWorktreeWorkspace) => {
+      setRestoringWorkspaceIds((current) => new Set(current).add(workspace.id));
+      setRestoreErrorsByWorkspaceId((current) => {
+        if (!current.has(workspace.id)) return current;
+        const next = new Map(current);
+        next.delete(workspace.id);
+        return next;
+      });
+      setRestoreWorkspaceIdToOpen(workspace.id);
+      try {
+        await handleRestoreWorkspace(workspace);
+      } catch (error) {
+        setRestoreWorkspaceIdToOpen((current) => (current === workspace.id ? null : current));
+        setRestoreErrorsByWorkspaceId((current) =>
+          new Map(current).set(
+            workspace.id,
+            error instanceof Error ? error.message : "Workspace restore failed.",
+          ),
+        );
+      } finally {
+        setRestoringWorkspaceIds((current) => {
+          const next = new Set(current);
+          next.delete(workspace.id);
+          return next;
+        });
+      }
+    },
+    [handleRestoreWorkspace],
+  );
+
+  useEffect(() => {
+    if (restoreWorkspaceIdToOpen === null) return;
+    const workspace = worktreeWorkspaces.find(
+      (candidate) => candidate.id === restoreWorkspaceIdToOpen,
+    );
+    if (!workspace) {
+      setRestoreWorkspaceIdToOpen(null);
+      return;
+    }
+    if (workspace.activeOperation === null && workspace.lastFailure?.kind === "restore") {
+      setRestoreWorkspaceIdToOpen(null);
+      return;
+    }
+    if (workspace.state !== "ready" || !workspace.path) return;
+    const project = projectById.get(workspace.projectId);
+    if (!project) return;
+    setRestoreWorkspaceIdToOpen(null);
+    setArchivedWorkspacesProjectId(null);
+    void handleOpenWorkspace(workspace, project).catch((error) => {
+      setRestoreErrorsByWorkspaceId((current) =>
+        new Map(current).set(
+          workspace.id,
+          error instanceof Error ? error.message : "The restored workspace could not be opened.",
+        ),
+      );
+    });
+  }, [handleOpenWorkspace, projectById, restoreWorkspaceIdToOpen, worktreeWorkspaces]);
+
   const openWorkspacePullRequest = useCallback(
     async (workspace: OrchestrationWorktreeWorkspace) => {
       const pr = workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
@@ -4655,15 +4762,18 @@ export default function Sidebar() {
           if (api && url) await api.shell.openExternal(url);
           return;
         }
-        case "fix-review-comments":
-        case "resolve-conflicts":
         case "archive-workspace":
         case "remove-from-synara":
+          await handleArchiveWorkspace(workspace);
+          return;
+        case "fix-review-comments":
+        case "resolve-conflicts":
           return;
       }
     },
     [
       handleCreateWorkspaceConversation,
+      handleArchiveWorkspace,
       handleOpenWorkspaceRunServer,
       handleStartWorkspaceRun,
       handleStopWorkspaceRun,
@@ -6463,6 +6573,7 @@ export default function Sidebar() {
     const projectToolbarReserveClassName =
       "group-hover/project-header:pr-[3.25rem] group-has-[:focus-visible]/project-header:pr-[3.25rem]";
     const repositoryUrl = projectGithubRepositoryUrlById.get(project.id) ?? null;
+    const archivedWorkspaceCount = listArchivedWorkspaces(worktreeWorkspaces, project.id).length;
     const projectContextMenuActions: ProjectContextMenuActions = {
       "new-workspace": { label: "New workspace" },
       "show-in-folder": {
@@ -6704,8 +6815,10 @@ export default function Sidebar() {
                           verifiedBranchUrl: branchUrl,
                           hasReviewComments: false,
                           hasConflicts: gitPresentation.pr?.mergeability === "conflicting",
-                          archiveEnabled: false,
-                          removeExternalEnabled: false,
+                          archiveEnabled:
+                            workspace.kind === "managed" && workspace.state === "ready",
+                          removeExternalEnabled:
+                            workspace.kind === "external" && workspace.state === "ready",
                         },
                       );
                       const trailing = workspaceJumpLabel ? (
@@ -6819,6 +6932,24 @@ export default function Sidebar() {
                       entry.isExpanded,
                     ),
                   )}
+
+              {workspaceProtocolVersion === 2 && archivedWorkspaceCount > 0 ? (
+                <SidebarMenuSubItem className="w-full">
+                  <SidebarMenuSubButton
+                    render={<button type="button" />}
+                    data-thread-selection-safe
+                    size="sm"
+                    className="h-7 translate-x-0 justify-start gap-2 rounded-lg px-2 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                    onClick={() => setArchivedWorkspacesProjectId(project.id)}
+                  >
+                    <HiOutlineArchiveBox className="size-3.5 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">Archived workspaces</span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground/55">
+                      {archivedWorkspaceCount}
+                    </span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              ) : null}
 
               {workspaceProtocolVersion !== 2 && (canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
@@ -7550,6 +7681,9 @@ export default function Sidebar() {
   const renameProjectDialogProject = renameProjectDialogId
     ? (projectById.get(renameProjectDialogId) ?? null)
     : null;
+  const archivedWorkspacesProject = archivedWorkspacesProjectId
+    ? (projectById.get(archivedWorkspacesProjectId) ?? null)
+    : null;
 
   return (
     <>
@@ -8235,6 +8369,21 @@ export default function Sidebar() {
         onListAccounts={handleListGitHubAccounts}
         onListRepositories={handleListGitHubRepositories}
       />
+
+      {archivedWorkspacesProject ? (
+        <ArchivedWorkspacesDialog
+          open
+          projectId={archivedWorkspacesProject.id}
+          projectName={archivedWorkspacesProject.name}
+          workspaces={worktreeWorkspaces}
+          pendingWorkspaceIds={restoringWorkspaceIds}
+          restoreErrorsByWorkspaceId={restoreErrorsByWorkspaceId}
+          onOpenChange={(open) => {
+            if (!open) setArchivedWorkspacesProjectId(null);
+          }}
+          onRestore={handleRestoreArchivedWorkspace}
+        />
+      ) : null}
 
       <WorktreeWorkspaceCreateDialog
         open={workspaceCreateProject !== null}
