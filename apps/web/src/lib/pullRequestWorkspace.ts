@@ -149,7 +149,7 @@ async function useExistingWorkspace(input: {
     association = "restored";
   } else if (input.workspace.state === "archiving") {
     throw new Error("This pull request workspace is still being archived. Try again shortly.");
-  } else if (input.workspace.state === "error") {
+  } else if (input.workspace.state === "error" || input.workspace.state === "setup-failed") {
     await retryFailedPullRequestProvision({ api: input.api, workspace: input.workspace });
   }
 

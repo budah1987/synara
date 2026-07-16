@@ -490,6 +490,9 @@ export function projectEvent(
           ...nextBase,
           workspaces: updateWorkspace(nextBase.workspaces ?? [], payload.workspaceId, {
             state: event.type === "workspace.archive-requested" ? "archiving" : "provisioning",
+            ...(event.type === "workspace.provision-requested"
+              ? { setupStatus: "pending" as const, setupError: null }
+              : {}),
             lifecycleGeneration: payload.generation,
             activeOperation: {
               id: payload.operationId,
@@ -639,7 +642,15 @@ export function projectEvent(
                     ? "archived"
                     : "error",
             ...(payload.kind === "setup"
-              ? { setupStatus: "failed" as const, setupError: payload.summary }
+              ? {
+                  setupStatus: "failed" as const,
+                  setupError: payload.summary,
+                  path: payload.path ?? null,
+                  branch: payload.branch ?? null,
+                  headRef: payload.headRef ?? null,
+                  targetResolvedCommit: payload.targetResolvedCommit ?? null,
+                  createdFromCommit: payload.createdFromCommit ?? null,
+                }
               : payload.kind === "provision"
                 ? {
                     setupStatus: "pending" as const,

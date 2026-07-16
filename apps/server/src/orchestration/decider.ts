@@ -902,7 +902,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (
         workspace.kind !== "managed" ||
         workspace.sourceKind !== "pull-request" ||
-        workspace.state !== "error" ||
+        (workspace.state !== "error" && workspace.state !== "setup-failed") ||
         workspace.activeOperation !== null
       ) {
         return yield* new OrchestrationCommandInvariantError({

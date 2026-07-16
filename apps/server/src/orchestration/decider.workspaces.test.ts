@@ -814,6 +814,104 @@ describe("worktree workspace commands", () => {
     ).rejects.toThrow(/cannot retry pull request provisioning while provisioning/);
   });
 
+  it("generation-fences a durable retry after pull-request setup fails", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-pr-setup-retry");
+    const firstOperationId = WorkspaceOperationId.makeUnsafe("workspace-pr-setup-first");
+    const created = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.create",
+          commandId: CommandId.makeUnsafe("workspace-pr-setup-create"),
+          workspaceId,
+          threadId: ThreadId.makeUnsafe("thread-pr-setup-retry"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          operationId: firstOperationId,
+          title: "Retry setup for PR workspace",
+          targetRef: "main",
+          branch: "feature/setup-retry",
+          sourceKind: "pull-request",
+          sourceRef: "https://github.com/acme/repo/pull/43",
+          lastKnownPr: {
+            number: 43,
+            title: "Retry setup for PR workspace",
+            url: "https://github.com/acme/repo/pull/43",
+            baseBranch: "main",
+            headBranch: "feature/setup-retry",
+            state: "open",
+          },
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    let readModel = await apply(initial, Array.isArray(created) ? created : [created]);
+    const failed = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.operation.fail",
+          commandId: CommandId.makeUnsafe("workspace-pr-setup-failed"),
+          workspaceId,
+          operationId: firstOperationId,
+          generation: 1,
+          kind: "setup",
+          stage: "setup",
+          summary: "bun install failed",
+          path: "/repo-worktrees/workspace-pr-setup-retry",
+          branch: "feature/setup-retry",
+          headRef: "abc123",
+          targetResolvedCommit: "abc123",
+          createdFromCommit: "abc123",
+          failedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(failed) ? failed : [failed]);
+    expect(readModel.workspaces?.find((workspace) => workspace.id === workspaceId)).toMatchObject({
+      state: "setup-failed",
+      lifecycleGeneration: 1,
+      setupStatus: "failed",
+      activeOperation: null,
+      path: "/repo-worktrees/workspace-pr-setup-retry",
+      lastFailure: { kind: "setup", stage: "setup" },
+    });
+
+    const retryOperationId = WorkspaceOperationId.makeUnsafe("workspace-pr-setup-second");
+    const retried = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.provision.request",
+          commandId: CommandId.makeUnsafe("workspace-pr-setup-request"),
+          workspaceId,
+          operationId: retryOperationId,
+          expectedGeneration: 1,
+          requestedAt: now,
+        },
+      }),
+    );
+    const retriedModel = await apply(readModel, Array.isArray(retried) ? retried : [retried]);
+    expect(
+      retriedModel.workspaces?.find((workspace) => workspace.id === workspaceId),
+    ).toMatchObject({
+      state: "provisioning",
+      lifecycleGeneration: 2,
+      setupStatus: "pending",
+      setupError: null,
+      activeOperation: { id: retryOperationId, generation: 2, kind: "provision" },
+      lastFailure: null,
+      path: "/repo-worktrees/workspace-pr-setup-retry",
+    });
+    expect(
+      retriedModel.threads.filter((thread) => thread.workspaceId === workspaceId),
+    ).toHaveLength(1);
+  });
+
   it("fences archive and restore transitions while retaining workspace metadata", async () => {
     const now = new Date().toISOString();
     const initial = await repositoryProject(now);

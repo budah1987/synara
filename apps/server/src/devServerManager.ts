@@ -38,6 +38,16 @@ const DEV_SERVER_TERMINAL_ROWS = 30;
 
 const devServerThreadId = (): string => `${DEV_SERVER_THREAD_PREFIX}${crypto.randomUUID()}`;
 
+export function devServerTerminalCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return `& { ${command} }; $__synara_success = $?; $__synara_exit_code = $LASTEXITCODE; if (-not $__synara_success) { if ($null -ne $__synara_exit_code -and $__synara_exit_code -ne 0) { exit $__synara_exit_code }; exit 1 }; exit 0`;
+  }
+  return `(${command}); __synara_exit_code=$?; exit $__synara_exit_code`;
+}
+
 interface TrackedProjectDevServer {
   readonly server: ProjectDevServer;
   readonly threadId: string;
@@ -220,12 +230,6 @@ export const DevServerManagerLive = Layer.effect(
             ...(input.env ? { env: input.env } : {}),
           });
 
-          yield* terminalManager.write({
-            threadId,
-            terminalId: DEFAULT_TERMINAL_ID,
-            data: `${input.command}\r`,
-          });
-
           const server: ProjectDevServer = {
             projectId: input.projectId,
             workspaceId: input.workspaceId,
@@ -239,6 +243,31 @@ export const DevServerManagerLive = Layer.effect(
             ...current,
             [targetKey]: { server, threadId },
           }));
+
+          // Register before sending input so an immediately failing command cannot emit its PTY
+          // exit before the reaper knows which workspace owns it. The single shell line exits the
+          // synthetic shell with the command's status instead of returning to an idle prompt.
+          yield* terminalManager
+            .write({
+              threadId,
+              terminalId: DEFAULT_TERMINAL_ID,
+              data: `${devServerTerminalCommand(input.command)}\r`,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                terminalManager.close({ threadId, deleteHistory: true }).pipe(
+                  Effect.andThen(
+                    Ref.update(registry, (current) => {
+                      if (current[targetKey]?.threadId !== threadId) return current;
+                      const next = { ...current };
+                      delete next[targetKey];
+                      return next;
+                    }),
+                  ),
+                  Effect.andThen(Effect.fail(error)),
+                ),
+              ),
+            );
           yield* publish({ type: "upserted", server });
           return { server };
         }),

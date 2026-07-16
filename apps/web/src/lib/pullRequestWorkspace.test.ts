@@ -189,57 +189,60 @@ describe("openPullRequestWorkspace", () => {
     expect(dispatchCommand).not.toHaveBeenCalled();
   });
 
-  it("retries a failed durable PR reservation without creating another workspace", async () => {
-    const failed = workspace({
-      state: "error",
-      path: "/worktrees/pr-42",
-      lifecycleGeneration: 1,
-      lastFailure: {
-        generation: 1,
-        kind: "provision",
-        stage: "resolve-target",
-        summary: "base was not available",
-        logId: null,
-      },
-    });
-    let current = snapshot([failed], [thread()]);
-    const dispatchCommand = vi.fn(
-      async (command: { type: string; expectedGeneration?: number }) => {
-        if (command.type === "workspace.provision.request") {
-          expect(command.expectedGeneration).toBe(1);
-          current = snapshot([workspace({ lifecycleGeneration: 2 })], [thread()]);
-        }
-        return { sequence: 1 };
-      },
-    );
-    const api = {
-      orchestration: {
-        getWorkspaceShellSnapshot: vi.fn(async () => current),
-        dispatchCommand,
-      },
-    } as unknown as NativeApi;
+  it.each(["error", "setup-failed"] as const)(
+    "retries a durable PR reservation from %s without creating another workspace",
+    async (state) => {
+      const failed = workspace({
+        state,
+        path: "/worktrees/pr-42",
+        lifecycleGeneration: 1,
+        lastFailure: {
+          generation: 1,
+          kind: state === "setup-failed" ? "setup" : "provision",
+          stage: state === "setup-failed" ? "setup" : "resolve-target",
+          summary: state === "setup-failed" ? "setup script failed" : "base was not available",
+          logId: null,
+        },
+      });
+      let current = snapshot([failed], [thread()]);
+      const dispatchCommand = vi.fn(
+        async (command: { type: string; expectedGeneration?: number }) => {
+          if (command.type === "workspace.provision.request") {
+            expect(command.expectedGeneration).toBe(1);
+            current = snapshot([workspace({ lifecycleGeneration: 2 })], [thread()]);
+          }
+          return { sequence: 1 };
+        },
+      );
+      const api = {
+        orchestration: {
+          getWorkspaceShellSnapshot: vi.fn(async () => current),
+          dispatchCommand,
+        },
+      } as unknown as NativeApi;
 
-    const result = await openPullRequestWorkspace({
-      api,
-      project,
-      defaultProvider: "codex",
-      intent: "open",
-      pullRequest: pr,
-    });
+      const result = await openPullRequestWorkspace({
+        api,
+        project,
+        defaultProvider: "codex",
+        intent: "open",
+        pullRequest: pr,
+      });
 
-    expect(result.association).toBe("active");
-    expect(result.workspace.state).toBe("ready");
-    expect(dispatchCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "workspace.provision.request",
-        workspaceId: failed.id,
-        expectedGeneration: 1,
-      }),
-    );
-    expect(dispatchCommand).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "workspace.create" }),
-    );
-  });
+      expect(result.association).toBe("active");
+      expect(result.workspace.state).toBe("ready");
+      expect(dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "workspace.provision.request",
+          workspaceId: failed.id,
+          expectedGeneration: 1,
+        }),
+      );
+      expect(dispatchCommand).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "workspace.create" }),
+      );
+    },
+  );
 
   it("restores an archived association before opening its existing conversation", async () => {
     const archived = workspace({

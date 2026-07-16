@@ -2,6 +2,9 @@
 // Purpose: Covers project dev-server registry helpers without starting PTYs.
 // Layer: Server unit tests for DevServerManager support logic.
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,6 +21,7 @@ import { Effect, Fiber, Layer, Stream } from "effect";
 import {
   DevServerManager,
   DevServerManagerLive,
+  devServerTerminalCommand,
   findProjectDevServerForLocalServer,
 } from "./devServerManager";
 import {
@@ -25,6 +29,8 @@ import {
   TerminalError,
   type TerminalManagerShape,
 } from "./terminal/Services/Manager";
+
+const execFileAsync = promisify(execFile);
 
 function makeDevServer(overrides: Partial<ProjectDevServer> = {}): ProjectDevServer {
   return {
@@ -208,6 +214,21 @@ describe("findProjectDevServerForLocalServer", () => {
 });
 
 describe("DevServerManager", () => {
+  it("uses PowerShell syntax and preserves native exit codes on Windows", () => {
+    expect(devServerTerminalCommand("bun run dev", "win32")).toBe(
+      "& { bun run dev }; $__synara_success = $?; $__synara_exit_code = $LASTEXITCODE; if (-not $__synara_success) { if ($null -ne $__synara_exit_code -and $__synara_exit_code -ne 0) { exit $__synara_exit_code }; exit 1 }; exit 0",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "exits the synthetic shell with the dev command status",
+    async () => {
+      await expect(
+        execFileAsync("/bin/sh", ["-c", devServerTerminalCommand("exit 23", "darwin")]),
+      ).rejects.toMatchObject({ code: 23 });
+    },
+  );
+
   it("keeps two workspace runs in the reconnect snapshot and forwards cwd and env", async () => {
     const terminal = makeTerminalManagerDouble();
     const first = workspaceTarget("workspace-1");
@@ -262,9 +283,109 @@ describe("DevServerManager", () => {
     ]);
     expect(terminal.openCalls[0]?.threadId).not.toBe(terminal.openCalls[1]?.threadId);
     expect(terminal.writeCalls.map((call) => call.data)).toEqual([
-      "bun run dev\r",
-      "bun run dev --port 4001\r",
+      "(bun run dev); __synara_exit_code=$?; exit $__synara_exit_code\r",
+      "(bun run dev --port 4001); __synara_exit_code=$?; exit $__synara_exit_code\r",
     ]);
+  });
+
+  it("reaps an exact workspace when its command exits during launch", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-fast-exit");
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      write: (input) =>
+        terminal.service
+          .write(input)
+          .pipe(Effect.tap(() => Effect.sync(() => terminal.emitExit(input.threadId)))),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(manager.stream, 2)).pipe(
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* manager.run({ ...target, command: "exit 1", cwd: "/repo/fast-exit" });
+        const events = Array.from(yield* Fiber.join(eventsFiber));
+        const snapshot = yield* manager.list;
+        return { events, snapshot };
+      }),
+    );
+
+    expect(result.snapshot.servers).toEqual([]);
+    expect(result.events).toMatchObject([
+      { type: "upserted", server: { workspaceId: "workspace-fast-exit" } },
+      {
+        type: "removed",
+        workspaceId: "workspace-fast-exit",
+        reason: "exited",
+        exitCode: 1,
+      },
+    ]);
+  });
+
+  it("removes a failed launch after its terminal closes successfully", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-write-failed");
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      write: (input) =>
+        terminal.service
+          .write(input)
+          .pipe(Effect.andThen(Effect.fail(new TerminalError({ message: "PTY write failed" })))),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        const launched = yield* Effect.exit(
+          manager.run({ ...target, command: "dev one", cwd: "/repo/one" }),
+        );
+        const snapshot = yield* manager.list;
+        return { launched, snapshot };
+      }),
+    );
+
+    expect(result.launched._tag).toBe("Failure");
+    expect(result.snapshot.servers).toEqual([]);
+    expect(terminal.closeCalls).toHaveLength(1);
+  });
+
+  it("keeps a failed launch registered when its terminal cannot be closed", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-write-close-failed");
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      write: (input) =>
+        terminal.service
+          .write(input)
+          .pipe(Effect.andThen(Effect.fail(new TerminalError({ message: "PTY write failed" })))),
+      close: (input) =>
+        terminal.service
+          .close(input)
+          .pipe(Effect.andThen(Effect.fail(new TerminalError({ message: "PTY close failed" })))),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        const launched = yield* Effect.exit(
+          manager.run({ ...target, command: "dev one", cwd: "/repo/one" }),
+        );
+        const snapshot = yield* manager.list;
+        return { launched, snapshot };
+      }),
+    );
+
+    expect(result.launched._tag).toBe("Failure");
+    expect(result.snapshot.servers).toMatchObject([
+      { workspaceId: "workspace-write-close-failed", command: "dev one" },
+    ]);
+    expect(terminal.closeCalls).toHaveLength(1);
   });
 
   it("stops only the selected workspace run", async () => {

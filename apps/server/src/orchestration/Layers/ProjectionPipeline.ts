@@ -743,6 +743,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionWorktreeWorkspaceRepository.upsert({
             ...existing.value,
             state: event.type === "workspace.archive-requested" ? "archiving" : "provisioning",
+            ...(event.type === "workspace.provision-requested"
+              ? { setupStatus: "pending" as const, setupError: null }
+              : {}),
             lifecycleGeneration: event.payload.generation,
             activeOperation: {
               id: event.payload.operationId,
@@ -892,7 +895,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                     ? "archived"
                     : "error",
             ...(event.payload.kind === "setup"
-              ? { setupStatus: "failed" as const, setupError: event.payload.summary }
+              ? {
+                  setupStatus: "failed" as const,
+                  setupError: event.payload.summary,
+                  path: event.payload.path ?? null,
+                  branch: event.payload.branch ?? null,
+                  headRef: event.payload.headRef ?? null,
+                  targetResolvedCommit: event.payload.targetResolvedCommit ?? null,
+                  createdFromCommit: event.payload.createdFromCommit ?? null,
+                }
               : event.payload.kind === "provision"
                 ? {
                     setupStatus: "pending" as const,
