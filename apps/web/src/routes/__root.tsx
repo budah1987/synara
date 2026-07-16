@@ -99,6 +99,11 @@ import {
   withProviderUpdateTimeout,
 } from "../providerUpdates";
 import {
+  coalesceOrchestrationUiEvents,
+  ORCHESTRATION_UI_EVENT_FLUSH_MS,
+  shouldFlushOrchestrationUiEvents,
+} from "./-orchestrationUiEventBatching";
+import {
   getGitInvalidationThreadIdForEvent,
   getProjectFileInvalidationThreadIdForEvent,
   getStudioOutputInvalidationThreadIdForEvent,
@@ -111,7 +116,6 @@ const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
 const PENDING_SHELL_EVENT_BUFFER_LIMIT = 1_024;
 const PENDING_THREAD_EVENT_BUFFER_LIMIT = 512;
-const IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT = 512;
 const seenProviderUpdateNotificationKeys = new Set<string>();
 
 function isWorkspaceShellSnapshot(
@@ -702,89 +706,12 @@ function errorDetails(error: unknown): string {
   }
 }
 
-function coalesceOrchestrationUiEvents(
-  events: ReadonlyArray<OrchestrationEvent>,
-): OrchestrationEvent[] {
-  if (events.length < 2) {
-    return [...events];
-  }
-
-  const coalesced: OrchestrationEvent[] = [];
-  for (const event of events) {
-    const previous = coalesced.at(-1);
-    if (
-      previous?.type === "thread.message-sent" &&
-      event.type === "thread.message-sent" &&
-      previous.payload.threadId === event.payload.threadId &&
-      previous.payload.messageId === event.payload.messageId
-    ) {
-      coalesced[coalesced.length - 1] = {
-        ...event,
-        payload: {
-          ...event.payload,
-          attachments: event.payload.attachments ?? previous.payload.attachments,
-          createdAt: previous.payload.createdAt,
-          text:
-            !event.payload.streaming && event.payload.text.length > 0
-              ? event.payload.text
-              : previous.payload.text + event.payload.text,
-        },
-      };
-      continue;
-    }
-
-    coalesced.push(event);
-  }
-
-  return coalesced;
-}
-
 function appendBounded<T>(items: T[], item: T, limit: number): void {
   const normalizedLimit = Math.max(1, Math.floor(limit));
   if (items.length >= normalizedLimit) {
     items.splice(0, items.length - normalizedLimit + 1);
   }
   items.push(item);
-}
-
-function addBoundedSetValue<T>(set: Set<T>, value: T, limit: number): void {
-  const normalizedLimit = Math.max(1, Math.floor(limit));
-  if (set.has(value)) {
-    set.delete(value);
-  }
-  while (set.size >= normalizedLimit) {
-    const oldestValue = set.values().next().value as T | undefined;
-    if (oldestValue === undefined) {
-      break;
-    }
-    set.delete(oldestValue);
-  }
-  set.add(value);
-}
-
-function shouldFlushDomainEventImmediately(
-  event: OrchestrationEvent,
-  immediatelyFlushedAssistantMessageIds: Set<string>,
-): boolean {
-  if (event.type !== "thread.message-sent" || event.payload.role !== "assistant") {
-    return false;
-  }
-
-  if (!event.payload.streaming) {
-    immediatelyFlushedAssistantMessageIds.delete(event.payload.messageId);
-    return false;
-  }
-
-  if (immediatelyFlushedAssistantMessageIds.has(event.payload.messageId)) {
-    return false;
-  }
-
-  addBoundedSetValue(
-    immediatelyFlushedAssistantMessageIds,
-    event.payload.messageId,
-    IMMEDIATE_ASSISTANT_FLUSH_ID_LIMIT,
-  );
-  return true;
 }
 
 function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: ThreadId): boolean {
@@ -1186,7 +1113,13 @@ function EventRouter() {
           needsBroadGitInvalidation = true;
         }
       }
-      if (shouldFlushDomainEventImmediately(event, immediatelyFlushedAssistantMessageIds)) {
+      if (
+        shouldFlushOrchestrationUiEvents(
+          event,
+          pendingDomainEvents,
+          immediatelyFlushedAssistantMessageIds,
+        )
+      ) {
         domainEventFlushThrottler.cancel();
         flushPendingDomainEvents();
         return;
@@ -1234,7 +1167,7 @@ function EventRouter() {
         flushPendingDomainEvents();
       },
       {
-        wait: 100,
+        wait: ORCHESTRATION_UI_EVENT_FLUSH_MS,
         leading: false,
         trailing: true,
       },
