@@ -489,6 +489,7 @@ export const makePullRequestService = (
                           involvement === "reviewing" || reviewingNumbers.has(pullRequest.number),
                         ),
                         viewerAuthored: isViewerAuthored(pullRequest.author, viewer),
+                        githubAccount,
                         isPinned: pinnedKeys.has(
                           projectPullRequestIdentityKey({
                             projectId: project.id,
@@ -597,6 +598,7 @@ export const makePullRequestService = (
                 ...result,
                 entries: result.entries.map((entry) => ({
                   ...entry,
+                  githubAccount,
                   viewerAuthored: isViewerAuthored(entry.author, viewer),
                 })),
               })),

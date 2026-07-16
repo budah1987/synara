@@ -388,7 +388,7 @@ export class WsTransport {
       this.startShellStream(handle);
     }
     if (this.workspaceShellSubscribed) {
-      this.startWorkspaceShellStream(client);
+      this.startWorkspaceShellStream(handle);
     }
     for (const [threadId, input] of this.threadSubscriptions) {
       this.startThreadStream(handle, threadId, input);

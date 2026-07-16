@@ -1301,14 +1301,11 @@ const make = Effect.gen(function* () {
               // The active turn can settle after the live-state check but before
               // Codex handles turn/steer. Preserve the submitted message by
               // starting it as a normal turn once the provider is idle.
-              yield* Effect.logWarning(
-                "provider command reactor falling back after stale steer",
-                {
-                  threadId: input.threadId,
-                  messageId: input.messageId,
-                  error,
-                },
-              );
+              yield* Effect.logWarning("provider command reactor falling back after stale steer", {
+                threadId: input.threadId,
+                messageId: input.messageId,
+                error,
+              });
               yield* capturePreTurnBaselines;
               return yield* sendQueuedProviderTurn(normalizedInput).pipe(
                 Effect.onError(() => cancelPendingStudioBaseline),

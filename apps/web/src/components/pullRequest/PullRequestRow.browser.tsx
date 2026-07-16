@@ -6,7 +6,7 @@ import "../../index.css";
 
 import type { PullRequestListEntry } from "@synara/contracts";
 import { page } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { useState } from "react";
 
@@ -89,10 +89,6 @@ function FocusRestoreHarness() {
 }
 
 describe("PullRequestRow pin control", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("pins without also selecting the pull request", async () => {
     const onSelect = vi.fn();
     const onTogglePinned = vi.fn();
@@ -305,10 +301,6 @@ describe("PullRequestRow pin control", () => {
 });
 
 describe("PullRequestProjectFilterPopover", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("announces the selected project on both the trigger and options", async () => {
     const projectId = "project-1" as PullRequestListEntry["projectId"];
     await render(
@@ -344,10 +336,6 @@ describe("PullRequestProjectFilterPopover", () => {
 });
 
 describe("PullRequestAvatar", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-  });
-
   it("does not derive an image URL from a team slug", async () => {
     await render(
       <PullRequestAvatar

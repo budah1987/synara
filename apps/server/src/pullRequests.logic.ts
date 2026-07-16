@@ -1,4 +1,5 @@
 import type {
+  GitHubAccountSelection,
   PullRequestActor,
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -95,6 +96,7 @@ export function buildPullRequestListEntry(input: {
   pullRequest: GitHubPullRequestListItem;
   viewerReviewRequested: boolean;
   viewerAuthored?: boolean;
+  githubAccount?: GitHubAccountSelection | null;
   isPinned: boolean;
 }): PullRequestListEntry {
   const { pullRequest } = input;
@@ -117,6 +119,7 @@ export function buildPullRequestListEntry(input: {
     reviewDecision: pullRequest.reviewDecision,
     viewerReviewRequested: input.viewerReviewRequested,
     ...(input.viewerAuthored === undefined ? {} : { viewerAuthored: input.viewerAuthored }),
+    ...(input.githubAccount === undefined ? {} : { githubAccount: input.githubAccount }),
     isPinned: input.isPinned,
     projectContexts: [
       {
