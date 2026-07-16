@@ -24,6 +24,11 @@ import { PullRequestDiffStat } from "./PullRequestDiffStat";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
 import { PullRequestStateGlyph } from "./PullRequestStateGlyph";
 import type { PullRequestWorkspaceAssociation } from "./pullRequestList.logic";
+import {
+  PullRequestRowContextMenu,
+  type PullRequestRowContextMenuActionId,
+  type PullRequestRowContextMenuActions,
+} from "./PullRequestRowContextMenu";
 
 function TruncatedTitle({ title, number }: { title: string; number: number }) {
   return (
@@ -49,16 +54,23 @@ export const PullRequestRow = memo(function PullRequestRow({
   selected,
   showProjectTitle = false,
   workspaceAssociation = null,
+  contextMenuActions = {},
   onClick,
   onTogglePinned,
+  onContextMenuAction,
 }: {
   entry: PullRequestListEntry;
   selected: boolean;
   /** All-projects view: identifies the preferred local context used when opening the remote PR. */
   showProjectTitle?: boolean;
   workspaceAssociation?: PullRequestWorkspaceAssociation;
+  contextMenuActions?: PullRequestRowContextMenuActions;
   onClick: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
+  onContextMenuAction?: (
+    actionId: PullRequestRowContextMenuActionId,
+    entry: PullRequestListEntry,
+  ) => void;
 }) {
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
@@ -71,7 +83,7 @@ export const PullRequestRow = memo(function PullRequestRow({
       : `pull request #${entry.number}`,
     isPinned,
   );
-  return (
+  const row = (
     <div
       className={cn(
         // The row bleeds past the page padding and pays the same amount back as its own
@@ -171,5 +183,13 @@ export const PullRequestRow = memo(function PullRequestRow({
         <TooltipPopup side="top">{pinLabel}</TooltipPopup>
       </Tooltip>
     </div>
+  );
+  if (!onContextMenuAction) return row;
+  return (
+    <PullRequestRowContextMenu
+      actions={contextMenuActions}
+      onAction={(actionId) => onContextMenuAction(actionId, entry)}
+      trigger={row}
+    />
   );
 });

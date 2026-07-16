@@ -43,9 +43,7 @@ export async function requestWorkspaceArchive(input: {
     action: "archive",
   });
   if (!preflight.canStart) {
-    throw new WorkspaceLifecycleBlockedError(
-      preflight.blockers.map((blocker) => blocker.message),
-    );
+    throw new WorkspaceLifecycleBlockedError(preflight.blockers.map((blocker) => blocker.message));
   }
 
   let confirmedWarnings = false;
@@ -80,9 +78,7 @@ export async function requestWorkspaceRestore(input: {
     action: "restore",
   });
   if (!preflight.canStart) {
-    throw new WorkspaceLifecycleBlockedError(
-      preflight.blockers.map((blocker) => blocker.message),
-    );
+    throw new WorkspaceLifecycleBlockedError(preflight.blockers.map((blocker) => blocker.message));
   }
 
   await input.api.orchestration.dispatchCommand({

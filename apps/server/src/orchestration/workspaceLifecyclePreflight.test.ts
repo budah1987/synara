@@ -186,19 +186,65 @@ describe("workspace lifecycle preflight", () => {
     });
   });
 
+  it("requires confirmation when the configured upstream branch was deleted remotely", async () => {
+    const result = await Effect.runPromise(
+      getWorkspaceLifecyclePreflight({
+        readModel: readModel(),
+        input: { workspaceId, action: "archive" },
+        git: {
+          ...gitStatus({
+            upstreamBranch: "feature/preflight",
+            publication: undefined,
+          }),
+          execute: ({ args }) => {
+            if (args[0] === "diff") {
+              return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+            }
+            if (args[0] === "config") {
+              return Effect.succeed({ code: 0, stdout: "origin\n", stderr: "" });
+            }
+            if (args[0] === "ls-remote") {
+              return Effect.succeed({ code: 2, stdout: "", stderr: "" });
+            }
+            throw new Error(`Unexpected Git command: ${args.join(" ")}`);
+          },
+        } as GitCoreShape,
+        fileSystem,
+        terminalManager,
+        devServerManager,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      canStart: true,
+      requiresConfirmation: true,
+      warnings: [{ code: "local-only-commits" }],
+    });
+  });
+
   it("blocks active turns, terminals, and the exact workspace dev server", async () => {
     const model = readModel();
-    model.threads[0]!.latestTurn = {
-      turnId: "turn-active" as never,
-      state: "running",
-      requestedAt: now,
-      startedAt: now,
-      completedAt: null,
-      assistantMessageId: null,
+    const thread = model.threads[0]!;
+    const modelWithActiveTurn: OrchestrationReadModel = {
+      ...model,
+      threads: [
+        {
+          ...thread,
+          latestTurn: {
+            turnId: "turn-active" as never,
+            state: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        ...model.threads.slice(1),
+      ],
     };
     const result = await Effect.runPromise(
       getWorkspaceLifecyclePreflight({
-        readModel: model,
+        readModel: modelWithActiveTurn,
         input: { workspaceId, action: "archive" },
         git: gitStatus(),
         fileSystem,
@@ -230,6 +276,53 @@ describe("workspace lifecycle preflight", () => {
     ]);
   });
 
+  it("blocks runtime activity owned by an archived conversation in the workspace", async () => {
+    const model = readModel();
+    const thread = model.threads[0]!;
+    const modelWithArchivedRuntime: OrchestrationReadModel = {
+      ...model,
+      threads: [
+        {
+          ...thread,
+          archivedAt: now,
+          latestTurn: {
+            turnId: "turn-archived-active" as never,
+            state: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        ...model.threads.slice(1),
+      ],
+    };
+    const inspectedThreadIds: string[][] = [];
+    const result = await Effect.runPromise(
+      getWorkspaceLifecyclePreflight({
+        readModel: modelWithArchivedRuntime,
+        input: { workspaceId, action: "archive" },
+        git: gitStatus(),
+        fileSystem,
+        terminalManager: {
+          ...terminalManager,
+          hasRunningSessionForThreadIds: (threadIds) =>
+            Effect.sync(() => {
+              inspectedThreadIds.push([...threadIds]);
+              return true;
+            }),
+        } as TerminalManagerShape,
+        devServerManager,
+      }),
+    );
+
+    expect(inspectedThreadIds).toEqual([[threadId]]);
+    expect(result.blockers.map((blocker) => blocker.code)).toEqual([
+      "agent-active",
+      "terminal-active",
+    ]);
+  });
+
   it("rejects repository-root lifecycle operations", async () => {
     const result = await Effect.runPromise(
       getWorkspaceLifecyclePreflight({
@@ -247,17 +340,27 @@ describe("workspace lifecycle preflight", () => {
 
   it("does not let stale runtime metadata block restoring an archived external workspace", async () => {
     const model = readModel({ kind: "external", state: "archived", archivedAt: now });
-    model.threads[0]!.latestTurn = {
-      turnId: "turn-stale" as never,
-      state: "running",
-      requestedAt: now,
-      startedAt: now,
-      completedAt: null,
-      assistantMessageId: null,
+    const thread = model.threads[0]!;
+    const modelWithStaleTurn: OrchestrationReadModel = {
+      ...model,
+      threads: [
+        {
+          ...thread,
+          latestTurn: {
+            turnId: "turn-stale" as never,
+            state: "running",
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        ...model.threads.slice(1),
+      ],
     };
     const result = await Effect.runPromise(
       getWorkspaceLifecyclePreflight({
-        readModel: model,
+        readModel: modelWithStaleTurn,
         input: { workspaceId, action: "restore" },
         git: {
           ...gitStatus(),

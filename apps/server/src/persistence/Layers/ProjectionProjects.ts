@@ -62,7 +62,7 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${row.isPinned ? 1 : 0},
           ${row.repositoryIdentity ?? null},
           ${row.defaultTargetRef ?? null},
-          ${row.githubAccount === null ? null : JSON.stringify(row.githubAccount)},
+          ${row.githubAccount == null ? null : JSON.stringify(row.githubAccount)},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}

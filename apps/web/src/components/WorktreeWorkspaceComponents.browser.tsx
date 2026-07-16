@@ -298,9 +298,9 @@ describe("ProjectContextMenu", () => {
       }),
     );
 
-    await expect.poll(() => document.activeElement?.textContent?.trim()).toBe(
-      "Show repository in Finder",
-    );
+    await expect
+      .poll(() => document.activeElement?.textContent?.trim())
+      .toBe("Show repository in Finder");
     await page.getByRole("menuitem", { name: "Show repository in Finder" }).click();
     expect(onAction).toHaveBeenCalledWith("show-in-folder", {
       projectId: PROJECT_ID,

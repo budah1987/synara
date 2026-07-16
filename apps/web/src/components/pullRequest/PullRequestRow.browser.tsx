@@ -255,6 +255,42 @@ describe("PullRequestRow pin control", () => {
     expect(page.getByText("Archived workspace")).toBeVisible();
   });
 
+  it("opens the pull request row context menu and dispatches its workspace action", async () => {
+    const onContextMenuAction = vi.fn();
+    await render(
+      <PullRequestRow
+        entry={makeEntry(false)}
+        selected={false}
+        workspaceAssociation="active"
+        contextMenuActions={{
+          "open-workspace": { label: "Open workspace" },
+          "new-review-conversation": { label: "New review conversation" },
+          "open-on-github": { label: "Open on GitHub" },
+          "copy-link": { label: "Copy pull request link" },
+        }}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+        onContextMenuAction={onContextMenuAction}
+      />,
+    );
+
+    const trigger = document.querySelector<HTMLElement>("[data-pull-request-row]");
+    expect(trigger).not.toBeNull();
+    if (!trigger) return;
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 24,
+      clientY: 36,
+      button: 2,
+    });
+    trigger.dispatchEvent(contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    await page.getByRole("menuitem", { name: "New review conversation" }).click();
+    expect(onContextMenuAction).toHaveBeenCalledWith("new-review-conversation", makeEntry(false));
+  });
+
   it("returns focus to the selected row when the focused dock closes", async () => {
     await render(<FocusRestoreHarness />);
 

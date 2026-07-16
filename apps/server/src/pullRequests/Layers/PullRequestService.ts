@@ -441,8 +441,7 @@ export const makePullRequestService = (
                     state: input.state,
                     viewer,
                   }),
-                  (key) =>
-                    listCache.invalidate(githubAccountScopedCacheKey(account, key)),
+                  (key) => listCache.invalidate(githubAccountScopedCacheKey(account, key)),
                   { concurrency: "unbounded", discard: true },
                 );
               }
@@ -588,12 +587,7 @@ export const makePullRequestService = (
                   ),
                 ),
               loadReviewMatches: (cwd, repository, viewerLogin) =>
-                loadReviewRequestedPullRequestNumbers(
-                  cwd,
-                  repository,
-                  viewerLogin,
-                  account,
-                ),
+                loadReviewRequestedPullRequestNumbers(cwd, repository, viewerLogin, account),
               invalidateItem: (key) =>
                 itemCache.invalidate(githubAccountScopedCacheKey(account, key)),
               loadItem: (cwd, repository, number) =>
@@ -715,7 +709,12 @@ export const PullRequestServiceLive = Layer.effect(
       github,
       pins,
       getSnapshot: () => projection.getSnapshot(),
-      resolveRepositories: (project) => resolveGitHubRepositories(git, project.workspaceRoot),
+      resolveRepositories: (project) =>
+        resolveGitHubRepositories(
+          git,
+          project.workspaceRoot,
+          project.githubAccount?.host ?? "github.com",
+        ),
     });
   }),
 );

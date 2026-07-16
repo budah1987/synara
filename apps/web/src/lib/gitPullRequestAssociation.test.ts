@@ -100,7 +100,11 @@ describe("pull request association resolution", () => {
   it("prefers live state and detects metadata changes", () => {
     const merged = { ...pullRequest, state: "merged" as const };
     expect(
-      resolvePullRequestAssociation({ live: merged, persisted: pullRequest, liveUnavailable: true }),
+      resolvePullRequestAssociation({
+        live: merged,
+        persisted: pullRequest,
+        liveUnavailable: true,
+      }),
     ).toBe(merged);
     expect(pullRequestAssociationsEqual(pullRequest, { ...pullRequest })).toBe(true);
     expect(pullRequestAssociationsEqual(pullRequest, merged)).toBe(false);

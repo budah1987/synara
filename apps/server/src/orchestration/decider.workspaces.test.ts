@@ -126,9 +126,7 @@ describe("worktree workspace commands", () => {
         },
       });
 
-    const created = await Effect.runPromise(
-      createPullRequestWorkspace("first", pullRequest.url),
-    );
+    const created = await Effect.runPromise(createPullRequestWorkspace("first", pullRequest.url));
     const events = Array.isArray(created) ? created : [created];
     expect(events[0]?.payload).toMatchObject({
       sourceKind: "pull-request",
@@ -685,6 +683,137 @@ describe("worktree workspace commands", () => {
     ).rejects.toThrow(/Stale workspace completion/);
   });
 
+  it("generation-fences a durable retry after pull-request provisioning fails", async () => {
+    const now = new Date().toISOString();
+    const initial = await repositoryProject(now);
+    const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-pr-retry");
+    const firstOperationId = WorkspaceOperationId.makeUnsafe("workspace-pr-retry-first");
+    const pullRequest = {
+      number: 42,
+      title: "Retry durable PR workspace",
+      url: "https://github.com/acme/repo/pull/42",
+      baseBranch: "release",
+      headBranch: "feature/pr-retry",
+      state: "open" as const,
+    };
+    const created = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "workspace.create",
+          commandId: CommandId.makeUnsafe("workspace-pr-retry-create"),
+          workspaceId,
+          threadId: ThreadId.makeUnsafe("thread-pr-retry"),
+          projectId: ProjectId.makeUnsafe("workspace-project"),
+          operationId: firstOperationId,
+          title: pullRequest.title,
+          targetRef: pullRequest.baseBranch,
+          branch: pullRequest.headBranch,
+          sourceKind: "pull-request",
+          sourceRef: pullRequest.url,
+          lastKnownPr: pullRequest,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: now,
+        },
+      }),
+    );
+    let readModel = await apply(initial, Array.isArray(created) ? created : [created]);
+    const failed = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.operation.fail",
+          commandId: CommandId.makeUnsafe("workspace-pr-retry-failed"),
+          workspaceId,
+          operationId: firstOperationId,
+          generation: 1,
+          kind: "provision",
+          stage: "resolve-target",
+          summary: "base was not available",
+          failedAt: now,
+        },
+      }),
+    );
+    readModel = await apply(readModel, Array.isArray(failed) ? failed : [failed]);
+    expect(readModel.workspaces?.find((workspace) => workspace.id === workspaceId)).toMatchObject({
+      state: "error",
+      lifecycleGeneration: 1,
+      activeOperation: null,
+      lastKnownPr: { number: 42 },
+    });
+    expect(readModel.threads.filter((thread) => thread.workspaceId === workspaceId)).toHaveLength(
+      1,
+    );
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "workspace.provision.request",
+            commandId: CommandId.makeUnsafe("workspace-pr-retry-stale-generation"),
+            workspaceId,
+            operationId: WorkspaceOperationId.makeUnsafe(
+              "workspace-pr-retry-stale-generation-operation",
+            ),
+            expectedGeneration: 0,
+            requestedAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Stale provision request/);
+
+    const retryOperationId = WorkspaceOperationId.makeUnsafe("workspace-pr-retry-second");
+    const retried = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "workspace.provision.request",
+          commandId: CommandId.makeUnsafe("workspace-pr-retry-request"),
+          workspaceId,
+          operationId: retryOperationId,
+          expectedGeneration: 1,
+          requestedAt: now,
+        },
+      }),
+    );
+    expect(retried).toMatchObject({
+      type: "workspace.provision-requested",
+      payload: { workspaceId, operationId: retryOperationId, generation: 2 },
+    });
+    const retriedModel = await apply(readModel, Array.isArray(retried) ? retried : [retried]);
+    expect(
+      retriedModel.workspaces?.find((workspace) => workspace.id === workspaceId),
+    ).toMatchObject({
+      state: "provisioning",
+      lifecycleGeneration: 2,
+      activeOperation: { id: retryOperationId, generation: 2, kind: "provision" },
+      lastFailure: null,
+      lastKnownPr: { number: 42 },
+    });
+    expect(
+      retriedModel.threads.filter((thread) => thread.workspaceId === workspaceId),
+    ).toHaveLength(1);
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: retriedModel,
+          command: {
+            type: "workspace.provision.request",
+            commandId: CommandId.makeUnsafe("workspace-pr-retry-stale"),
+            workspaceId,
+            operationId: WorkspaceOperationId.makeUnsafe("workspace-pr-retry-stale-operation"),
+            expectedGeneration: 1,
+            requestedAt: now,
+          },
+        }),
+      ),
+    ).rejects.toThrow(/cannot retry pull request provisioning while provisioning/);
+  });
+
   it("fences archive and restore transitions while retaining workspace metadata", async () => {
     const now = new Date().toISOString();
     const initial = await repositoryProject(now);
@@ -751,7 +880,7 @@ describe("worktree workspace commands", () => {
       readModel,
       Array.isArray(archiveRequested) ? archiveRequested : [archiveRequested],
     );
-    expect(readModel.workspaces[0]).toMatchObject({
+    expect(readModel.workspaces?.[0]).toMatchObject({
       state: "archiving",
       lifecycleGeneration: 2,
       path: "/tmp/workspace-lifecycle",
@@ -788,7 +917,7 @@ describe("worktree workspace commands", () => {
       }),
     );
     readModel = await apply(readModel, Array.isArray(archived) ? archived : [archived]);
-    expect(readModel.workspaces[0]).toMatchObject({
+    expect(readModel.workspaces?.[0]).toMatchObject({
       state: "archived",
       path: "/tmp/workspace-lifecycle",
       branch: "synara/lifecycle",
@@ -832,7 +961,7 @@ describe("worktree workspace commands", () => {
       }),
     );
     readModel = await apply(readModel, Array.isArray(restored) ? restored : [restored]);
-    expect(readModel.workspaces[0]).toMatchObject({
+    expect(readModel.workspaces?.[0]).toMatchObject({
       state: "ready",
       lifecycleGeneration: 3,
       archivedAt: null,

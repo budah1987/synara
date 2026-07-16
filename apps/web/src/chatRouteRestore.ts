@@ -59,7 +59,9 @@ export function resolveRestorableThreadRouteWithFallback(input: {
     const restorableFallback = resolveRestorableThreadRoute({
       lastThreadRoute: fallbackRoute,
       availableThreadIds: input.availableThreadIds,
-      availableSplitViewIds: input.availableSplitViewIds,
+      ...(input.availableSplitViewIds
+        ? { availableSplitViewIds: input.availableSplitViewIds }
+        : {}),
     });
     if (restorableFallback) {
       return restorableFallback;

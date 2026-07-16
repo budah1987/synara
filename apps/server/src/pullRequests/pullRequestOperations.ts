@@ -8,7 +8,6 @@ import { Effect } from "effect";
 
 import type { GitHubCliShape } from "../git/Services/GitHubCli";
 import type { ProjectPullRequestPinsShape } from "../persistence/Services/ProjectPullRequestPins";
-import { isPullRequestMergeMethodAllowed } from "../pullRequests.logic";
 import type { PullRequestServiceShape } from "./Services/PullRequestService";
 
 type PullRequestOperations = Pick<
@@ -132,22 +131,14 @@ export function makePullRequestOperations(dependencies: {
 
   const action: PullRequestServiceShape["action"] = (input) =>
     Effect.gen(function* () {
+      if (input.action === "merge") {
+        return yield* Effect.fail(
+          new Error("Merge this pull request on GitHub. Synara does not merge pull requests."),
+        );
+      }
       const project = yield* dependencies.findProject(input.projectId);
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       const account = project.githubAccount ?? undefined;
-      if (input.action === "merge") {
-        const mergeMethod = input.mergeMethod ?? "merge";
-        const capabilities = yield* dependencies.loadMergeCapabilities(
-          project.workspaceRoot,
-          repository,
-          account,
-        );
-        if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
-          return yield* Effect.fail(
-            new Error(`The repository does not allow the ${mergeMethod} merge method.`),
-          );
-        }
-      }
       yield* dependencies.github
         .runPullRequestAction({
           cwd: project.workspaceRoot,

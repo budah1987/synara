@@ -13,11 +13,7 @@ const workspace = {
   kind: "managed",
 } as OrchestrationWorktreeWorkspace;
 
-function api(input: {
-  canStart?: boolean;
-  warnings?: string[];
-  confirmed?: boolean;
-}) {
+function api(input: { canStart?: boolean; warnings?: string[]; confirmed?: boolean }) {
   const dispatchCommand = vi.fn().mockResolvedValue({ sequence: 1 });
   const confirm = vi.fn().mockResolvedValue(input.confirmed ?? true);
   const getWorkspaceLifecyclePreflight = vi.fn().mockResolvedValue({

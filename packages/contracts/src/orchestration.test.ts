@@ -589,6 +589,37 @@ it.effect("decodes workspace pin metadata commands and events", () =>
 
 it.effect("decodes generation-fenced workspace lifecycle contracts", () =>
   Effect.gen(function* () {
+    const provisionCommand = yield* decodeClientOrchestrationCommand({
+      type: "workspace.provision.request",
+      commandId: "cmd-workspace-provision",
+      workspaceId: "workspace-1",
+      operationId: "operation-provision-2",
+      expectedGeneration: 1,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(provisionCommand.type, "workspace.provision.request");
+
+    const provisionEvent = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-workspace-provision",
+      aggregateKind: "workspace",
+      aggregateId: "workspace-1",
+      type: "workspace.provision-requested",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      commandId: "cmd-workspace-provision",
+      causationEventId: null,
+      correlationId: "cmd-workspace-provision",
+      metadata: {},
+      payload: {
+        workspaceId: "workspace-1",
+        operationId: "operation-provision-2",
+        generation: 2,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(provisionEvent.type, "workspace.provision-requested");
+    assert.strictEqual(provisionEvent.payload.generation, 2);
+
     const command = yield* decodeClientOrchestrationCommand({
       type: "workspace.archive.request",
       commandId: "cmd-workspace-archive",

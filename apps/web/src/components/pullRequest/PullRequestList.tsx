@@ -15,6 +15,10 @@ import {
   type PullRequestWorkspaceAssociation,
 } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
+import {
+  derivePullRequestRowContextMenuActions,
+  type PullRequestRowContextMenuActionId,
+} from "./PullRequestRowContextMenu";
 import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
@@ -26,8 +30,10 @@ export const PullRequestList = memo(function PullRequestList({
   selectedNumber,
   showProjectTitle = false,
   workspaceAssociationByEntryKey,
+  canArchiveWorkspaceByEntryKey,
   onSelect,
   onTogglePinned,
+  onContextMenuAction,
 }: {
   entries: PullRequestListEntry[];
   grouped: PullRequestListGroup[] | null;
@@ -36,24 +42,39 @@ export const PullRequestList = memo(function PullRequestList({
   selectedNumber: number | undefined;
   showProjectTitle?: boolean;
   workspaceAssociationByEntryKey?: Readonly<Record<string, PullRequestWorkspaceAssociation>>;
+  canArchiveWorkspaceByEntryKey?: Readonly<Record<string, boolean>>;
   onSelect: (entry: PullRequestListEntry) => void;
   onTogglePinned: (entry: PullRequestListEntry) => void;
+  onContextMenuAction?: (
+    actionId: PullRequestRowContextMenuActionId,
+    entry: PullRequestListEntry,
+  ) => void;
 }) {
-  const renderEntry = (entry: PullRequestListEntry) => (
-    <PullRequestRow
-      key={pullRequestListEntryKey(entry)}
-      entry={entry}
-      showProjectTitle={showProjectTitle}
-      selected={
-        selectedProjectId === entry.projectId &&
-        selectedRepo === entry.repository &&
-        selectedNumber === entry.number
-      }
-      workspaceAssociation={workspaceAssociationByEntryKey?.[pullRequestListEntryKey(entry)] ?? null}
-      onClick={onSelect}
-      onTogglePinned={onTogglePinned}
-    />
-  );
+  const renderEntry = (entry: PullRequestListEntry) => {
+    const entryKey = pullRequestListEntryKey(entry);
+    const workspaceAssociation = workspaceAssociationByEntryKey?.[entryKey] ?? null;
+    return (
+      <PullRequestRow
+        key={entryKey}
+        entry={entry}
+        showProjectTitle={showProjectTitle}
+        selected={
+          selectedProjectId === entry.projectId &&
+          selectedRepo === entry.repository &&
+          selectedNumber === entry.number
+        }
+        workspaceAssociation={workspaceAssociation}
+        contextMenuActions={derivePullRequestRowContextMenuActions({
+          entry,
+          association: workspaceAssociation,
+          canArchiveAssociatedWorkspace: canArchiveWorkspaceByEntryKey?.[entryKey] === true,
+        })}
+        onClick={onSelect}
+        onTogglePinned={onTogglePinned}
+        {...(onContextMenuAction ? { onContextMenuAction } : {})}
+      />
+    );
+  };
   if (grouped) {
     return (
       <div className="space-y-0.5">

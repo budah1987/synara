@@ -77,7 +77,12 @@ function commandToAggregateRef(command: OrchestrationCommand): {
     case "workspace.attach":
     case "workspace.meta.update":
     case "workspace.import-legacy":
+    case "workspace.provision.request":
     case "workspace.provision.complete":
+    case "workspace.archive.request":
+    case "workspace.archive.complete":
+    case "workspace.restore.request":
+    case "workspace.restore.complete":
     case "workspace.operation.fail":
       return {
         aggregateKind: "workspace",

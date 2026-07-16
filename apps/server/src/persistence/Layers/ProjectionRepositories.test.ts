@@ -47,8 +47,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const rows = yield* sql<{
         readonly defaultModelSelection: string | null;
+        readonly githubAccount: string | null;
       }>`
-        SELECT default_model_selection_json AS "defaultModelSelection"
+        SELECT
+          default_model_selection_json AS "defaultModelSelection",
+          github_account_json AS "githubAccount"
         FROM projection_projects
         WHERE project_id = 'project-null-options'
       `;
@@ -64,6 +67,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "gpt-5.4",
         }),
       );
+      assert.strictEqual(row.githubAccount, null);
 
       const persisted = yield* projects.getById({
         projectId: ProjectId.makeUnsafe("project-null-options"),

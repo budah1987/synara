@@ -52,13 +52,7 @@ export type ProjectContextMenuProps = {
 };
 
 const ACTION_GROUPS: readonly (readonly ProjectContextMenuActionId[])[] = [
-  [
-    "new-workspace",
-    "show-in-folder",
-    "open-in-kanban",
-    "open-repository-on-github",
-    "copy-path",
-  ],
+  ["new-workspace", "show-in-folder", "open-in-kanban", "open-repository-on-github", "copy-path"],
   ["edit-project", "toggle-pin"],
   ["remove-project"],
 ];
@@ -95,7 +89,12 @@ export function getFirstEnabledProjectContextMenuActionId(
     .find((actionId) => actions[actionId]?.disabled !== true);
 }
 
-export function ProjectContextMenu({ trigger, target, actions, onAction }: ProjectContextMenuProps) {
+export function ProjectContextMenu({
+  trigger,
+  target,
+  actions,
+  onAction,
+}: ProjectContextMenuProps) {
   const triggerRef = useRef<HTMLDivElement>(null);
   const firstEnabledItemRef = useRef<HTMLDivElement>(null);
   const focusFrameRef = useRef<number | null>(null);

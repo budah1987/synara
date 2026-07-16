@@ -83,8 +83,7 @@ export function workspaceReferencesPullRequest(
 ): boolean {
   const sourcePullRequest = pullRequestFromSourceRef(workspace.sourceRef);
   return (
-    (workspace.lastKnownPr !== null &&
-      pullRequestsMatch(workspace.lastKnownPr, pullRequest)) ||
+    (workspace.lastKnownPr !== null && pullRequestsMatch(workspace.lastKnownPr, pullRequest)) ||
     (sourcePullRequest !== null && pullRequestsMatch(sourcePullRequest, pullRequest))
   );
 }

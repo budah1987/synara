@@ -19,10 +19,10 @@ export type ProjectRunStatus = ProjectDevServer["status"];
 export type ProjectRunState = ProjectDevServer;
 export type ProjectRunsByTargetKey = Record<ProjectDevServerTargetKey, ProjectRunState>;
 
-type RemoveProjectRun = {
-  (target: ProjectDevServerTarget): void;
-  (projectId: ProjectId, workspaceId?: WorktreeWorkspaceId | null): void;
-};
+type RemoveProjectRun = (
+  targetOrProjectId: ProjectDevServerTarget | ProjectId,
+  workspaceId?: WorktreeWorkspaceId | null,
+) => void;
 
 export interface ProjectRunStoreState {
   /** Canonical projection. A project may own multiple concurrent workspace runs. */

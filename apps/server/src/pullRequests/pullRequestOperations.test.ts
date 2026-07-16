@@ -56,6 +56,54 @@ const detail: GitHubPullRequestDetailData = {
 };
 
 describe("makePullRequestOperations", () => {
+  it("rejects native merge actions before invoking GitHub", async () => {
+    let actionCalls = 0;
+    let capabilityCalls = 0;
+    const base = createGitHubCliWithFakeGh().service;
+    const operations = makePullRequestOperations({
+      github: {
+        ...base,
+        runPullRequestAction: () =>
+          Effect.sync(() => {
+            actionCalls += 1;
+          }),
+      },
+      pins: {
+        listByProjectIds: () => Effect.succeed([]),
+        setPinned: () => Effect.void,
+      },
+      findProject: () => Effect.succeed(project),
+      validateRepository: (repository) => Effect.succeed(repository),
+      validateProjectRepository: (_project, repository) => Effect.succeed(repository),
+      loadMergeCapabilities: () =>
+        Effect.sync(() => {
+          capabilityCalls += 1;
+          return {
+            merge: true,
+            squash: true,
+            rebase: true,
+            deleteBranchOnMerge: false,
+          };
+        }),
+      withGitHubRead: (effect) => effect,
+      finalizeMutationCaches: () => Effect.void,
+    });
+
+    await expect(
+      Effect.runPromise(
+        operations.action({
+          projectId: project.id,
+          repository: "acme/widgets",
+          number: 42,
+          action: "merge",
+          mergeMethod: "squash",
+        }),
+      ),
+    ).rejects.toThrow("Merge this pull request on GitHub");
+    expect(actionCalls).toBe(0);
+    expect(capabilityCalls).toBe(0);
+  });
+
   it("uses the project's selected account for every GitHub-backed operation", async () => {
     const account: GitHubAccountSelection = { host: "enterprise.example.com", login: "alice" };
     const accountProject = { ...project, githubAccount: account };

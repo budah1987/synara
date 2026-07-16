@@ -7,7 +7,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
-  CopyIcon,
   FolderIcon,
   KanbanIcon,
   type LucideIcon,
@@ -37,7 +36,6 @@ import { IoFilter } from "react-icons/io5";
 import {
   useCallback,
   useEffect,
-  Fragment,
   lazy,
   startTransition,
   useMemo,
@@ -78,6 +76,7 @@ import {
   type ProviderKind,
   ThreadId,
   type GitStatusResult,
+  type PullRequestDetail,
   type GitHubAccountSelection,
   type ProjectDiscoveredScriptTarget,
   type ResolvedKeybindingsConfig,
@@ -105,7 +104,11 @@ import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
 import { readEditorRailActiveChat } from "../editorViewState";
 import { openInPreferredEditor } from "../editorPreferences";
-import { buildReviewPullRequestPrompt } from "./chat/environment/environmentPullRequest.logic";
+import {
+  buildFixFindingsPrompt,
+  buildResolveConflictsPrompt,
+  buildReviewPullRequestPrompt,
+} from "./chat/environment/environmentPullRequest.logic";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { waitForWorkspaceConversationSnapshot } from "../lib/managedWorkspace";
 import { openPullRequestWorkspace } from "../lib/pullRequestWorkspace";
@@ -152,6 +155,7 @@ import {
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
+  pullRequestDetailQueryOptions,
   pullRequestQueryKeys,
   pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
@@ -288,21 +292,12 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
-import { Input } from "./ui/input";
-import {
-  Dialog,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from "./ui/dialog";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Menu,
   MenuGroup,
   MenuItem,
+  MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuSeparator,
@@ -1594,8 +1589,9 @@ export default function Sidebar() {
   const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
-  const [archivedWorkspacesProjectId, setArchivedWorkspacesProjectId] =
-    useState<ProjectId | null>(null);
+  const [archivedWorkspacesProjectId, setArchivedWorkspacesProjectId] = useState<ProjectId | null>(
+    null,
+  );
   const [restoringWorkspaceIds, setRestoringWorkspaceIds] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -2001,7 +1997,13 @@ export default function Sidebar() {
       return [];
     }
     return worktreeWorkspaces.flatMap((workspace) => {
-      if (workspace.deletedAt !== null || !workspace.path || !workspace.branch) {
+      if (
+        workspace.deletedAt !== null ||
+        workspace.archivedAt !== null ||
+        workspace.state === "archived" ||
+        !workspace.path ||
+        !workspace.branch
+      ) {
         return [];
       }
       return [
@@ -2022,10 +2024,7 @@ export default function Sidebar() {
     })),
   });
   const workspaceGitQueryIndexById = useMemo(
-    () =>
-      new Map(
-        workspaceGitTargets.map((target, index) => [target.workspaceId, index] as const),
-      ),
+    () => new Map(workspaceGitTargets.map((target, index) => [target.workspaceId, index] as const)),
     [workspaceGitTargets],
   );
   const workspaceBranchUrlById = useMemo(() => {
@@ -2033,11 +2032,7 @@ export default function Sidebar() {
     for (let index = 0; index < workspaceGitTargets.length; index += 1) {
       const target = workspaceGitTargets[index];
       const status = workspaceGitQueries[index]?.data;
-      if (
-        target &&
-        status?.branch === target.branch &&
-        status.publication?.state === "published"
-      ) {
+      if (target && status?.branch === target.branch && status.publication?.state === "published") {
         urls.set(target.workspaceId, status.publication.url);
       }
     }
@@ -2080,6 +2075,38 @@ export default function Sidebar() {
     }
     return presentationById;
   }, [workspaceGitQueries, workspaceGitQueryIndexById, worktreeWorkspaces]);
+  const workspacePullRequestDetailTargets = useMemo(
+    () =>
+      worktreeWorkspaces.flatMap((workspace) => {
+        const pr = workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
+        if (!pr) return [];
+        const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+        if (!repository) return [];
+        return [
+          {
+            workspaceId: workspace.id,
+            input: { projectId: workspace.projectId, repository, number: pr.number },
+          },
+        ];
+      }),
+    [workspaceGitPresentationById, worktreeWorkspaces],
+  );
+  const workspacePullRequestDetailQueries = useQueries({
+    queries: workspacePullRequestDetailTargets.map((target) => ({
+      ...pullRequestDetailQueryOptions(target.input, { pollingEnabled: false }),
+      // Subscribe to a detail panel's cached/live snapshot without introducing per-row fetches.
+      enabled: false,
+    })),
+  });
+  const workspacePullRequestDetailById = useMemo(() => {
+    const details = new Map<WorktreeWorkspaceId, PullRequestDetail>();
+    for (let index = 0; index < workspacePullRequestDetailTargets.length; index += 1) {
+      const target = workspacePullRequestDetailTargets[index];
+      const detail = workspacePullRequestDetailQueries[index]?.data;
+      if (target && detail) details.set(target.workspaceId, detail);
+    }
+    return details;
+  }, [workspacePullRequestDetailQueries, workspacePullRequestDetailTargets]);
   const renamingWorkspaceGitQueryIndex = renamingWorktreeWorkspace
     ? workspaceGitQueryIndexById.get(renamingWorktreeWorkspace.id)
     : undefined;
@@ -2103,11 +2130,7 @@ export default function Sidebar() {
       return "unverified";
     }
     const status = renamingWorkspaceGitQuery?.data;
-    if (
-      !status ||
-      status.branch !== renamingWorktreeWorkspace.branch ||
-      !status.publication
-    ) {
+    if (!status || status.branch !== renamingWorktreeWorkspace.branch || !status.publication) {
       return "unavailable";
     }
     if (
@@ -2147,9 +2170,9 @@ export default function Sidebar() {
   const projectRunCommandByProjectIdRef = useRef<
     Map<ProjectId, ReturnType<typeof selectPrimaryProjectRunCommand>>
   >(new Map());
-  const workspaceRunServerByIdRef = useRef<
-    Map<WorktreeWorkspaceId, ServerLocalServerProcess>
-  >(new Map());
+  const workspaceRunServerByIdRef = useRef<Map<WorktreeWorkspaceId, ServerLocalServerProcess>>(
+    new Map(),
+  );
   useEffect(() => {
     projectByIdRef.current = projectById;
   }, [projectById]);
@@ -2855,8 +2878,7 @@ export default function Sidebar() {
             ? await recoverExistingAddProjectTarget({
                 existingProjectId: existing?.id,
                 workspaceRoot: cwd,
-                recoverByProjectId: (projectId) =>
-                  recoverExistingProjectFromServer(api, projectId),
+                recoverByProjectId: (projectId) => recoverExistingProjectFromServer(api, projectId),
                 recoverByWorkspaceRoot: (workspaceRoot) =>
                   recoverExistingProjectByWorkspaceRootFromServer(api, workspaceRoot),
               })
@@ -3173,12 +3195,7 @@ export default function Sidebar() {
       setProjectExpanded(project.id, true);
       await navigate({ to: "/$threadId", params: { threadId } });
     },
-    [
-      appSettings.defaultProvider,
-      navigate,
-      setProjectExpanded,
-      syncServerWorkspaceShellSnapshot,
-    ],
+    [appSettings.defaultProvider, navigate, setProjectExpanded, syncServerWorkspaceShellSnapshot],
   );
 
   const handleRenameWorktreeWorkspace = useCallback(
@@ -4392,9 +4409,7 @@ export default function Sidebar() {
       const api = readNativeApi();
       const runCommand = projectRunCommandByProjectIdRef.current.get(project.id);
       if (!api || !workspace.path || !runCommand) return;
-      if (
-        selectWorkspaceProjectRun(projectRunsByTargetKey, project.id, workspace.id) !== null
-      ) {
+      if (selectWorkspaceProjectRun(projectRunsByTargetKey, project.id, workspace.id) !== null) {
         return;
       }
       const input = buildWorkspaceProjectRunInput({
@@ -4418,17 +4433,11 @@ export default function Sidebar() {
         toastManager.add({
           type: "error",
           title: `Failed to run "${getWorktreeWorkspaceSidebarLabel(workspace)}"`,
-          description:
-            error instanceof Error ? error.message : "Unable to start the run command.",
+          description: error instanceof Error ? error.message : "Unable to start the run command.",
         });
       }
     },
-    [
-      projectRunsByTargetKey,
-      queryClient,
-      storeRemoveProjectRun,
-      storeUpsertProjectRun,
-    ],
+    [projectRunsByTargetKey, queryClient, storeRemoveProjectRun, storeUpsertProjectRun],
   );
 
   const handleStopWorkspaceRun = useCallback(
@@ -4458,28 +4467,27 @@ export default function Sidebar() {
     [queryClient, storeRemoveProjectRun],
   );
 
-  const handleOpenWorkspaceRunServer = useCallback(
-    async (workspaceId: WorktreeWorkspaceId) => {
-      const api = readNativeApi();
-      const server = workspaceRunServerByIdRef.current.get(workspaceId);
-      const url = server ? firstLocalServerUrl(server) : null;
-      if (!api || !server || !url) return;
-      try {
-        await api.shell.openExternal(url);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: `Unable to open ${localServerAddressLabel(server)}`,
-          description: error instanceof Error ? error.message : "Unable to open the local server.",
-        });
-      }
-    },
-    [],
-  );
+  const handleOpenWorkspaceRunServer = useCallback(async (workspaceId: WorktreeWorkspaceId) => {
+    const api = readNativeApi();
+    const server = workspaceRunServerByIdRef.current.get(workspaceId);
+    const url = server ? firstLocalServerUrl(server) : null;
+    if (!api || !server || !url) return;
+    try {
+      await api.shell.openExternal(url);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: `Unable to open ${localServerAddressLabel(server)}`,
+        description: error instanceof Error ? error.message : "Unable to open the local server.",
+      });
+    }
+  }, []);
 
   const handleOpenWorkspace = useCallback(
     async (workspace: OrchestrationWorktreeWorkspace, project: Project) => {
-      const workspaceThreads = workspaceThreadsByWorkspaceId.get(workspace.id) ?? [];
+      const workspaceThreads = sidebarDisplayThreads.filter(
+        (thread) => thread.workspaceId === workspace.id,
+      );
       const firstThread = workspaceThreads[0];
       if (!firstThread) {
         await handleCreateWorkspaceConversation(workspace.id, project);
@@ -4490,7 +4498,7 @@ export default function Sidebar() {
         workspaceThreads.find((thread) => thread.id === rememberedThreadId) ?? firstThread;
       await navigate({ to: "/$threadId", params: { threadId: targetThread.id } });
     },
-    [handleCreateWorkspaceConversation, navigate, workspaceThreadsByWorkspaceId],
+    [handleCreateWorkspaceConversation, navigate, sidebarDisplayThreads],
   );
 
   const handleToggleWorkspacePin = useCallback(
@@ -4752,8 +4760,51 @@ export default function Sidebar() {
           await handleArchiveWorkspace(workspace);
           return;
         case "fix-review-comments":
-        case "resolve-conflicts":
+        case "resolve-conflicts": {
+          const pullRequest =
+            workspaceGitPresentationById.get(workspace.id)?.pr ?? workspace.lastKnownPr;
+          if (!pullRequest) throw new Error("The workspace pull request is unavailable.");
+          const detail = workspacePullRequestDetailById.get(workspace.id);
+          if (actionId === "fix-review-comments" && !detail) {
+            throw new Error(
+              "Open the pull request details, then try fixing review comments again.",
+            );
+          }
+          const result = await openPullRequestWorkspace({
+            api: ensureNativeApi(),
+            project,
+            defaultProvider: appSettings.defaultProvider,
+            intent: "new-conversation",
+            conversationTitle:
+              actionId === "fix-review-comments"
+                ? `Fix review comments on PR #${pullRequest.number}`
+                : `Resolve conflicts on PR #${pullRequest.number}`,
+            pullRequest,
+            onSnapshot: syncServerWorkspaceShellSnapshot,
+          });
+          const prompt =
+            actionId === "fix-review-comments" && detail
+              ? buildFixFindingsPrompt({
+                  prNumber: detail.number,
+                  prTitle: detail.title,
+                  prUrl: detail.url,
+                  headBranch: detail.headBranch,
+                  baseBranch: detail.baseBranch,
+                  comments: detail.comments,
+                  checks: detail.checks,
+                  commentsTruncated: detail.commentsTruncated,
+                  commentsIncomplete: detail.commentsIncomplete,
+                })
+              : buildResolveConflictsPrompt({
+                  prNumber: pullRequest.number,
+                  prUrl: pullRequest.url,
+                  headBranch: pullRequest.headBranch,
+                  baseBranch: pullRequest.baseBranch,
+                });
+          appendComposerPromptText(result.threadId, prompt);
+          await navigate({ to: "/$threadId", params: { threadId: result.threadId } });
           return;
+        }
       }
     },
     [
@@ -4763,9 +4814,15 @@ export default function Sidebar() {
       handleStartWorkspaceRun,
       handleStopWorkspaceRun,
       handleToggleWorkspacePin,
+      appSettings.defaultProvider,
+      copyPathToClipboard,
+      navigate,
       openWorkspacePullRequest,
       runWorkspaceGitLifecycleAction,
+      syncServerWorkspaceShellSnapshot,
       workspaceBranchUrlById,
+      workspaceGitPresentationById,
+      workspacePullRequestDetailById,
     ],
   );
 
@@ -5539,19 +5596,20 @@ export default function Sidebar() {
 
     return [...visibleThreadIdSet];
   }, [pinnedThreads, studioChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
-  const activeWorkspaceId = useMemo(
-    () =>
-      sidebarDisplayThreads.find((thread) => thread.id === activeSidebarThreadId)?.workspaceId ??
-      null,
-    [activeSidebarThreadId, sidebarDisplayThreads],
-  );
+  const activeWorkspaceId = useMemo(() => {
+    const workspaceId = sidebarDisplayThreads.find(
+      (thread) => thread.id === activeSidebarThreadId,
+    )?.workspaceId;
+    return workspaceId ? WorktreeWorkspaceId.makeUnsafe(workspaceId) : null;
+  }, [activeSidebarThreadId, sidebarDisplayThreads]);
   const workspaceThreadsByWorkspaceId = useMemo(() => {
     const threadsByWorkspaceId = new Map<WorktreeWorkspaceId, SidebarThreadSummary[]>();
     for (const thread of sidebarDisplayThreads) {
       if (!thread.workspaceId) continue;
-      const workspaceThreads = threadsByWorkspaceId.get(thread.workspaceId) ?? [];
+      const workspaceId = WorktreeWorkspaceId.makeUnsafe(thread.workspaceId);
+      const workspaceThreads = threadsByWorkspaceId.get(workspaceId) ?? [];
       workspaceThreads.push(thread);
-      threadsByWorkspaceId.set(thread.workspaceId, workspaceThreads);
+      threadsByWorkspaceId.set(workspaceId, workspaceThreads);
     }
     for (const [workspaceId, workspaceThreads] of threadsByWorkspaceId) {
       threadsByWorkspaceId.set(
@@ -5703,8 +5761,7 @@ export default function Sidebar() {
       const status = query?.data;
       statusByCwd.set(target.cwd, {
         status,
-        unavailable:
-          status === undefined || query?.error != null || status.prUnavailable === true,
+        unavailable: status === undefined || query?.error != null || status.prUnavailable === true,
       });
     }
 
@@ -5729,14 +5786,14 @@ export default function Sidebar() {
       const branchMatches =
         target.branch !== null && status?.branch !== null && status?.branch === target.branch;
       const livePr = branchMatches ? (status?.pr ?? null) : null;
-      map.set(
-        target.threadId,
-        resolvePullRequestAssociation({
-          live: livePr,
-          persisted: storedPrByThreadId.get(target.threadId) ?? target.lastKnownPr,
-          liveUnavailable: statusResult?.unavailable !== false || !branchMatches,
-        }),
-      );
+      const associatedPullRequest = resolvePullRequestAssociation({
+        live: livePr,
+        persisted:
+          storedPrByThreadId.get(target.threadId) ??
+          (target.lastKnownPr ? toThreadPr(target.lastKnownPr) : null),
+        liveUnavailable: statusResult?.unavailable !== false || !branchMatches,
+      });
+      map.set(target.threadId, associatedPullRequest ? toThreadPr(associatedPullRequest) : null);
     }
     return map;
   }, [
@@ -6579,143 +6636,140 @@ export default function Sidebar() {
 
     const projectHeader = (
       <PreviewCard>
-          <PreviewCardTrigger
-            {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
-            render={
-              <div
-                className="group/project-header relative"
-                data-project-hover-anchor={project.id}
-              />
-            }
+        <PreviewCardTrigger
+          {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+          render={
+            <div className="group/project-header relative" data-project-hover-anchor={project.id} />
+          }
+        >
+          <SidebarMenuButton
+            ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+            size="sm"
+            className={cn(
+              SIDEBAR_HEADER_ROW_CLASS_NAME,
+              "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
+              isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+            )}
+            {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
+            {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
+            onPointerDownCapture={handleProjectTitlePointerDownCapture}
+            onClick={(event) => handleProjectTitleClick(event, project.id)}
+            onKeyDown={(event) => handleProjectTitleKeyDown(event, project.id)}
           >
-            <SidebarMenuButton
-              ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+            <SidebarLeadingIcon
               size="sm"
-              className={cn(
-                SIDEBAR_HEADER_ROW_CLASS_NAME,
-                "hover:bg-[var(--sidebar-accent)] group-hover/project-header:bg-[var(--sidebar-accent)] group-hover/project-header:text-[var(--sidebar-accent-foreground)]",
-                isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-              )}
-              {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
-              {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
-              onPointerDownCapture={handleProjectTitlePointerDownCapture}
-              onClick={(event) => handleProjectTitleClick(event, project.id)}
-              onKeyDown={(event) => handleProjectTitleKeyDown(event, project.id)}
+              tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
+              className={projectFolderIconClassName}
             >
-              <SidebarLeadingIcon
-                size="sm"
-                tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
-                className={projectFolderIconClassName}
-              >
-                <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
-              </SidebarLeadingIcon>
-              <div
+              <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
+            </SidebarLeadingIcon>
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
+                projectToolbarReserveClassName,
+              )}
+            >
+              <span
                 className={cn(
-                  "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
-                  projectToolbarReserveClassName,
+                  "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 )}
               >
-                <span
-                  className={cn(
-                    "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
-                    SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                  )}
-                >
-                  {project.name}
-                </span>
-                {project.localName ? (
-                  <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
-                    {project.folderName}
-                  </span>
-                ) : null}
-              </div>
-              {/* Closed folders surface child-chat status on the project row; open
-                  folders leave that signal to their visible child thread rows. */}
-              {isProjectRunning || collapsedProjectStatus ? (
-                <span
-                  aria-label={
-                    collapsedProjectStatus
-                      ? `Project status: ${collapsedProjectStatus.label}`
-                      : undefined
-                  }
-                  title={collapsedProjectStatus?.label}
-                  className={cn(
-                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
-                    sidebarHoverRevealHideClassName("project-header"),
-                  )}
-                >
-                  {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
-                  {collapsedProjectStatus ? (
-                    <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
-                  ) : null}
+                {project.name}
+              </span>
+              {project.localName ? (
+                <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
+                  {project.folderName}
                 </span>
               ) : null}
-            </SidebarMenuButton>
-            <button
-              type="button"
-              aria-label={pinActionLabel(project.name, isProjectPinned)}
-              aria-pressed={isProjectPinned}
-              title={pinActionLabel(project.name, isProjectPinned)}
-              className={cn(
-                "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
-                SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                isProjectPinned
-                  ? "pointer-events-auto opacity-100"
-                  : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-              )}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-              }}
+            </div>
+            {/* Closed folders surface child-chat status on the project row; open
+                  folders leave that signal to their visible child thread rows. */}
+            {isProjectRunning || collapsedProjectStatus ? (
+              <span
+                aria-label={
+                  collapsedProjectStatus
+                    ? `Project status: ${collapsedProjectStatus.label}`
+                    : undefined
+                }
+                title={collapsedProjectStatus?.label}
+                className={cn(
+                  "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
+                  sidebarHoverRevealHideClassName("project-header"),
+                )}
+              >
+                {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
+                {collapsedProjectStatus ? (
+                  <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
+                ) : null}
+              </span>
+            ) : null}
+          </SidebarMenuButton>
+          <button
+            type="button"
+            aria-label={pinActionLabel(project.name, isProjectPinned)}
+            aria-pressed={isProjectPinned}
+            title={pinActionLabel(project.name, isProjectPinned)}
+            className={cn(
+              "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+              SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+              isProjectPinned
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleProjectPinned(project.id);
+            }}
+          >
+            <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
+          </button>
+          <SidebarSectionToolbar placement="overlay" revealOnHover>
+            <SidebarIconButton
+              icon={IoIosGitCompare}
+              label={`View pull requests for ${project.name}`}
+              tooltip="Pull requests"
+              tooltipSide="top"
               onClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                toggleProjectPinned(project.id);
+                // Opens the in-app pull requests view scoped to this project (selecting a
+                // row there opens the right-dock detail panel) instead of leaving for GitHub.
+                void navigate({
+                  to: "/pull-requests",
+                  search: { involvement: "all", state: "open", projectId: project.id },
+                });
               }}
-            >
-              <PinStatusIcon pinned={isProjectPinned} className="size-3.5" />
-            </button>
-            <SidebarSectionToolbar placement="overlay" revealOnHover>
-              <SidebarIconButton
-                icon={IoIosGitCompare}
-                label={`View pull requests for ${project.name}`}
-                tooltip="Pull requests"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  // Opens the in-app pull requests view scoped to this project (selecting a
-                  // row there opens the right-dock detail panel) instead of leaving for GitHub.
-                  void navigate({
-                    to: "/pull-requests",
-                    search: { involvement: "all", state: "open", projectId: project.id },
+            />
+            <SidebarIconButton
+              icon={NewThreadIcon}
+              label={`Create new thread in ${project.name}`}
+              tooltip={
+                newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
+              }
+              tooltipSide="top"
+              data-testid="new-thread-button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (workspaceProtocolVersion === 2) {
+                  setWorkspaceCreateProjectId(project.id);
+                } else {
+                  const envMode = resolveSidebarNewThreadEnvMode({
+                    defaultEnvMode: appSettings.defaultThreadEnvMode,
                   });
-                }}
-              />
-              <SidebarIconButton
-                icon={NewThreadIcon}
-                label={`Create new thread in ${project.name}`}
-                tooltip={
-                  newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"
+                  void handleNewThread(project.id, { envMode });
                 }
-                tooltipSide="top"
-                data-testid="new-thread-button"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (workspaceProtocolVersion === 2) {
-                    setWorkspaceCreateProjectId(project.id);
-                  } else {
-                    const envMode = resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    });
-                    void handleNewThread(project.id, { envMode });
-                  }
-                }}
-              />
-            </SidebarSectionToolbar>
-          </PreviewCardTrigger>
-          {renderProjectHoverCardPopup(project, allProjectThreadCount)}
+              }}
+            />
+          </SidebarSectionToolbar>
+        </PreviewCardTrigger>
+        {renderProjectHoverCardPopup(project, allProjectThreadCount)}
       </PreviewCard>
     );
 
@@ -6754,160 +6808,161 @@ export default function Sidebar() {
               {workspaceProtocolVersion === 2
                 ? orderWorktreeWorkspacesForSidebar(
                     worktreeWorkspaces.filter((workspace) => workspace.projectId === project.id),
-                  )
-                    .map((workspace) => {
-                      const workspaceThreads =
-                        workspaceThreadsByWorkspaceId.get(workspace.id) ?? [];
-                      const isActiveWorkspace = workspaceThreads.some(
-                        (thread) => thread.id === visualActiveSidebarThreadId,
-                      );
-                      const workspaceStatus = resolveProjectStatusIndicator(
-                        workspaceThreads.map(resolveThreadStatusForSidebar),
-                      );
-                      const workspaceShortcutThreadId = workspaceShortcutThreadIdById.get(
-                        workspace.id,
-                      );
-                      const workspaceJumpLabel = workspaceShortcutThreadId
-                        ? (visibleThreadJumpLabelByThreadId.get(workspaceShortcutThreadId) ?? null)
-                        : null;
-                      const workspaceJumpLabelParts = workspaceShortcutThreadId
-                        ? (visibleThreadJumpLabelPartsByThreadId.get(workspaceShortcutThreadId) ??
-                          EMPTY_SHORTCUT_PARTS)
-                        : EMPTY_SHORTCUT_PARTS;
-                      const branchUrl = workspaceBranchUrlById.get(workspace.id) ?? null;
-                      const gitPresentation = workspaceGitPresentationById.get(workspace.id) ?? {
-                        state: "unavailable" as const,
-                        pr: workspace.lastKnownPr,
-                        status: null,
-                      };
-                      const workspaceRun = workspaceRunById.get(workspace.id) ?? null;
-                      const workspaceRunServer =
-                        workspaceRunServerById.get(workspace.id) ?? null;
-                      const devServerUrl = workspaceRunServer
-                        ? firstLocalServerUrl(workspaceRunServer)
-                        : null;
-                      const contextMenuActions = deriveWorktreeWorkspaceContextMenuActions(
-                        workspace,
-                        {
-                          gitPresentationState: gitPresentation.state,
-                          revealLabel: isMacPlatform()
-                            ? "Show in Finder"
-                            : "Show in File Explorer",
-                          hasEditorIntegration: availableEditors.length > 0,
-                          devServerState:
-                            workspaceRun || workspaceRunServer ? "running" : "stopped",
-                          devServerUrl,
-                          verifiedBranchUrl: branchUrl,
-                          hasReviewComments: false,
-                          hasConflicts: gitPresentation.pr?.mergeability === "conflicting",
-                          archiveEnabled:
-                            workspace.kind === "managed" && workspace.state === "ready",
-                          removeExternalEnabled:
-                            workspace.kind === "external" && workspace.state === "ready",
-                        },
-                      );
-                      const trailing = workspaceJumpLabel ? (
-                        <KbdGroup>
-                          {workspaceJumpLabelParts.map((part) => (
-                            <Kbd key={part}>{part}</Kbd>
-                          ))}
-                        </KbdGroup>
-                      ) : workspaceRun || workspaceRunServer ? (
-                        <ProjectRunIndicatorDot />
-                      ) : workspace.state !== "ready" ? (
-                        <span
-                          className={cn(
-                            "size-1.5 shrink-0 rounded-full",
-                            workspace.state === "provisioning"
-                              ? "animate-pulse bg-amber-400/80 motion-reduce:animate-none"
-                              : "bg-red-400/85",
-                          )}
-                          aria-label={`Workspace ${workspace.state}`}
+                  ).map((workspace) => {
+                    const workspaceThreads = workspaceThreadsByWorkspaceId.get(workspace.id) ?? [];
+                    const isActiveWorkspace = workspaceThreads.some(
+                      (thread) => thread.id === visualActiveSidebarThreadId,
+                    );
+                    const workspaceStatus = resolveProjectStatusIndicator(
+                      workspaceThreads.map(resolveThreadStatusForSidebar),
+                    );
+                    const workspaceShortcutThreadId = workspaceShortcutThreadIdById.get(
+                      workspace.id,
+                    );
+                    const workspaceJumpLabel = workspaceShortcutThreadId
+                      ? (visibleThreadJumpLabelByThreadId.get(workspaceShortcutThreadId) ?? null)
+                      : null;
+                    const workspaceJumpLabelParts = workspaceShortcutThreadId
+                      ? (visibleThreadJumpLabelPartsByThreadId.get(workspaceShortcutThreadId) ??
+                        EMPTY_SHORTCUT_PARTS)
+                      : EMPTY_SHORTCUT_PARTS;
+                    const branchUrl = workspaceBranchUrlById.get(workspace.id) ?? null;
+                    const gitPresentation = workspaceGitPresentationById.get(workspace.id) ?? {
+                      state: "unavailable" as const,
+                      pr: workspace.lastKnownPr,
+                      status: null,
+                    };
+                    const workspaceRun = workspaceRunById.get(workspace.id) ?? null;
+                    const workspaceRunServer = workspaceRunServerById.get(workspace.id) ?? null;
+                    const devServerUrl = workspaceRunServer
+                      ? firstLocalServerUrl(workspaceRunServer)
+                      : null;
+                    const revealLabel =
+                      typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
+                        ? "Show in Finder"
+                        : "Show in File Explorer";
+                    const publicationLabel =
+                      gitPresentation.pr !== null
+                        ? presentPullRequestState(gitPresentation.pr)
+                        : gitPresentation.state === "local-only"
+                          ? "Local only"
+                          : gitPresentation.state === "published"
+                            ? "Published"
+                            : null;
+                    const contextMenuActions = deriveWorktreeWorkspaceContextMenuActions(
+                      workspace,
+                      {
+                        gitPresentationState: gitPresentation.state,
+                        revealLabel,
+                        hasEditorIntegration: availableEditors.length > 0,
+                        devServerState: workspaceRun || workspaceRunServer ? "running" : "stopped",
+                        devServerUrl,
+                        verifiedBranchUrl: branchUrl,
+                        hasReviewComments:
+                          workspacePullRequestDetailById
+                            .get(workspace.id)
+                            ?.comments.some(
+                              (comment) =>
+                                (comment.kind === "review-comment" || comment.kind === "review") &&
+                                comment.body.trim().length > 0,
+                            ) === true,
+                        hasConflicts: gitPresentation.pr?.mergeability === "conflicting",
+                        archiveEnabled: workspace.kind === "managed" && workspace.state === "ready",
+                        removeExternalEnabled:
+                          workspace.kind === "external" && workspace.state === "ready",
+                      },
+                    );
+                    const trailing = workspaceJumpLabel ? (
+                      <KbdGroup>
+                        {workspaceJumpLabelParts.map((part) => (
+                          <Kbd key={part}>{part}</Kbd>
+                        ))}
+                      </KbdGroup>
+                    ) : workspaceRun || workspaceRunServer ? (
+                      <ProjectRunIndicatorDot />
+                    ) : workspace.state !== "ready" ? (
+                      <span
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          workspace.state === "provisioning"
+                            ? "animate-pulse bg-amber-400/80 motion-reduce:animate-none"
+                            : "bg-red-400/85",
+                        )}
+                        aria-label={`Workspace ${workspace.state}`}
+                      />
+                    ) : workspaceStatus ? (
+                      <SidebarStatusTrailingGlyph status={workspaceStatus} />
+                    ) : null;
+                    return (
+                      <SidebarMenuSubItem key={workspace.id} className="w-full">
+                        <WorktreeWorkspaceRow
+                          workspace={workspace}
+                          isActive={isActiveWorkspace}
+                          openConversationCount={workspaceThreads.length}
+                          contextMenuActions={contextMenuActions}
+                          hoverCard={{
+                            branch: workspace.branch,
+                            branchUrl,
+                            ...(workspace.branch
+                              ? {
+                                  branchPresentation: {
+                                    name: workspace.branch,
+                                    verifiedUrl: branchUrl,
+                                  },
+                                }
+                              : {}),
+                            path: workspace.path
+                              ? formatWorktreePathForDisplay(workspace.path)
+                              : null,
+                            ...(workspace.path
+                              ? {
+                                  pathPresentation: {
+                                    displayPath: formatWorktreePathForDisplay(workspace.path),
+                                    absolutePath: workspace.path,
+                                    revealLabel,
+                                  },
+                                }
+                              : {}),
+                            ...(publicationLabel ? { publicationLabel } : {}),
+                            pullRequest: gitPresentation.pr
+                              ? {
+                                  number: gitPresentation.pr.number,
+                                  stateLabel: presentPullRequestState(gitPresentation.pr),
+                                  actionLabel: `View pull request #${gitPresentation.pr.number}`,
+                                }
+                              : null,
+                            source: workspace.sourceRef ?? workspace.targetRef,
+                            status: gitPresentation.state,
+                            onOpenBranch: openWorkspaceBranchLink,
+                            onRevealPath: (path) => {
+                              const api = readNativeApi();
+                              if (api) void api.shell.showInFolder(path);
+                            },
+                            onOpenPullRequest: () => void openWorkspacePullRequest(workspace),
+                          }}
+                          trailing={trailing}
+                          onOpenWorkspace={() => void handleOpenWorkspace(workspace, project)}
+                          onRenameWorkspace={() => setRenamingWorktreeWorkspaceId(workspace.id)}
+                          onContextMenuAction={(actionId) =>
+                            void handleWorkspaceContextMenuAction(
+                              actionId,
+                              workspace,
+                              project,
+                            ).catch((error) => {
+                              toastManager.add({
+                                type: "error",
+                                title: "Workspace action failed",
+                                description:
+                                  error instanceof Error
+                                    ? error.message
+                                    : "An unexpected error occurred.",
+                              });
+                            })
+                          }
                         />
-                      ) : workspaceStatus ? (
-                        <SidebarStatusTrailingGlyph status={workspaceStatus} />
-                      ) : null;
-                      return (
-                        <SidebarMenuSubItem key={workspace.id} className="w-full">
-                          <WorktreeWorkspaceRow
-                            workspace={workspace}
-                            isActive={isActiveWorkspace}
-                            openConversationCount={workspaceThreads.length}
-                            contextMenuActions={contextMenuActions}
-                            hoverCard={{
-                              branch: workspace.branch,
-                              branchUrl,
-                              ...(workspace.branch
-                                ? {
-                                    branchPresentation: {
-                                      name: workspace.branch,
-                                      verifiedUrl: branchUrl,
-                                    },
-                                  }
-                                : {}),
-                              path: workspace.path
-                                ? formatWorktreePathForDisplay(workspace.path)
-                                : null,
-                              ...(workspace.path
-                                ? {
-                                    pathPresentation: {
-                                      displayPath: formatWorktreePathForDisplay(workspace.path),
-                                      absolutePath: workspace.path,
-                                      revealLabel: isMacPlatform()
-                                        ? "Show in Finder"
-                                        : "Show in File Explorer",
-                                    },
-                                  }
-                                : {}),
-                              publicationLabel:
-                                gitPresentation.pr !== null
-                                  ? presentPullRequestState(gitPresentation.pr)
-                                  : gitPresentation.state === "local-only"
-                                    ? "Local only"
-                                    : gitPresentation.state === "published"
-                                      ? "Published"
-                                      : undefined,
-                              pullRequest: gitPresentation.pr
-                                ? {
-                                    number: gitPresentation.pr.number,
-                                    stateLabel: presentPullRequestState(gitPresentation.pr),
-                                    actionLabel: `View pull request #${gitPresentation.pr.number}`,
-                                  }
-                                : null,
-                              source: workspace.sourceRef ?? workspace.targetRef,
-                              status: gitPresentation.state,
-                              onOpenBranch: openWorkspaceBranchLink,
-                              onRevealPath: (path) => {
-                                const api = readNativeApi();
-                                if (api) void api.shell.showInFolder(path);
-                              },
-                              onOpenPullRequest: () => void openWorkspacePullRequest(workspace),
-                            }}
-                            trailing={trailing}
-                            onOpenWorkspace={() => void handleOpenWorkspace(workspace, project)}
-                            onRenameWorkspace={() =>
-                              setRenamingWorktreeWorkspaceId(workspace.id)
-                            }
-                            onContextMenuAction={(actionId) =>
-                              void handleWorkspaceContextMenuAction(
-                                actionId,
-                                workspace,
-                                project,
-                              ).catch((error) => {
-                                toastManager.add({
-                                  type: "error",
-                                  title: "Workspace action failed",
-                                  description:
-                                    error instanceof Error
-                                      ? error.message
-                                      : "An unexpected error occurred.",
-                                });
-                              })
-                            }
-                          />
-                        </SidebarMenuSubItem>
-                      );
-                    })
+                      </SidebarMenuSubItem>
+                    );
+                  })
                 : visibleEntries.map((entry) =>
                     renderThreadRow(
                       entry.thread,

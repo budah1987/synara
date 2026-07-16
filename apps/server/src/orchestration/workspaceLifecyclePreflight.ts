@@ -32,6 +32,44 @@ const activeAgentSession = (thread: OrchestrationReadModel["threads"][number]) =
   thread.session?.status === "starting" ||
   thread.session?.status === "running";
 
+const hasDeletedUpstream = (
+  git: GitCoreShape,
+  cwd: string,
+  status: {
+    readonly branch: string | null;
+    readonly hasUpstream: boolean;
+    readonly upstreamBranch: string | null;
+  },
+) =>
+  !status.hasUpstream || !status.branch || !status.upstreamBranch
+    ? Effect.succeed(false)
+    : Effect.gen(function* () {
+        const branch = status.branch as string;
+        const upstreamBranch = status.upstreamBranch as string;
+        const remote = yield* git.execute({
+          operation: "WorktreeWorkspaceLifecyclePreflight.upstreamRemote",
+          cwd,
+          args: ["config", "--get", `branch.${branch}.remote`],
+          allowNonZeroExit: true,
+          timeoutMs: 5_000,
+          maxOutputBytes: 4_096,
+        });
+        const remoteName = remote.code === 0 ? remote.stdout.trim() : "";
+        if (!remoteName || remoteName === ".") return false;
+
+        const remoteBranch = upstreamBranch.replace(/^refs\/heads\//, "");
+        const published = yield* git.execute({
+          operation: "WorktreeWorkspaceLifecyclePreflight.upstreamPublication",
+          cwd,
+          args: ["ls-remote", "--exit-code", "--heads", remoteName, `refs/heads/${remoteBranch}`],
+          allowNonZeroExit: true,
+          timeoutMs: 10_000,
+          maxOutputBytes: 4_096,
+          truncateOutput: true,
+        });
+        return published.code === 2 || (published.code === 0 && published.stdout.trim() === "");
+      }).pipe(Effect.catch(() => Effect.succeed(false)));
+
 export const getWorkspaceLifecyclePreflight = Effect.fn(function* (
   dependencies: WorkspaceLifecyclePreflightDependencies,
 ) {
@@ -85,11 +123,12 @@ export const getWorkspaceLifecyclePreflight = Effect.fn(function* (
   }
 
   const workspaceThreads = readModel.threads.filter(
-    (thread) =>
-      thread.workspaceId === workspace.id && thread.deletedAt === null && thread.archivedAt === null,
+    (thread) => thread.workspaceId === workspace.id && thread.deletedAt === null,
   );
   if (input.action === "archive" && workspaceThreads.some(activeAgentSession)) {
-    blockers.push(issue("agent-active", "Stop the active agent turn before archiving this workspace."));
+    blockers.push(
+      issue("agent-active", "Stop the active agent turn before archiving this workspace."),
+    );
   }
 
   const threadIds = new Set(workspaceThreads.map((thread) => String(thread.id)));
@@ -145,7 +184,10 @@ export const getWorkspaceLifecyclePreflight = Effect.fn(function* (
           );
         } else if (conflicts.value.stdout.length > 0) {
           blockers.push(
-            issue("merge-conflicts", "Resolve the merge conflicts before archiving this workspace."),
+            issue(
+              "merge-conflicts",
+              "Resolve the merge conflicts before archiving this workspace.",
+            ),
           );
         }
         if (status.value.hasWorkingTreeChanges) {
@@ -157,7 +199,8 @@ export const getWorkspaceLifecyclePreflight = Effect.fn(function* (
           );
         } else if (
           !status.value.hasUpstream ||
-          status.value.publication?.state === "stale_upstream"
+          status.value.publication?.state === "stale_upstream" ||
+          (yield* hasDeletedUpstream(git, workspace.path, status.value))
         ) {
           warnings.push(
             issue(
@@ -230,7 +273,10 @@ export const getWorkspaceLifecyclePreflight = Effect.fn(function* (
             : null;
         if (!registeredAtExpectedPath || canonicalActual !== canonicalExpected) {
           blockers.push(
-            issue("path-occupied", "Another file or directory occupies the archived workspace path."),
+            issue(
+              "path-occupied",
+              "Another file or directory occupies the archived workspace path.",
+            ),
           );
         }
       }

@@ -21,9 +21,7 @@ export type WorktreeWorkspaceActionContext = {
 
 export function isActiveWorktreeWorkspace(workspace: OrchestrationWorktreeWorkspace): boolean {
   return (
-    workspace.deletedAt === null &&
-    workspace.archivedAt === null &&
-    workspace.state !== "archived"
+    workspace.deletedAt === null && workspace.archivedAt === null && workspace.state !== "archived"
   );
 }
 

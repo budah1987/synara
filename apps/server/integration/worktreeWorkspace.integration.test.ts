@@ -83,7 +83,7 @@ function responseFor(input: {
         status: "completed",
       },
     ],
-    mutateWorkspace: input.mutateWorkspace,
+    ...(input.mutateWorkspace ? { mutateWorkspace: input.mutateWorkspace } : {}),
   };
 }
 

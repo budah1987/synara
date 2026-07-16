@@ -499,7 +499,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (!pullRequestsMatch(requestedPullRequest, pullRequestSource)) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: "The pull request source URL does not match the requested pull request metadata.",
+            detail:
+              "The pull request source URL does not match the requested pull request metadata.",
           });
         }
         const existingPrWorkspace = findReservedWorkspaceForPullRequest({
@@ -510,10 +511,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: duplicatePullRequestWorkspaceDetail(
-              requestedPullRequest,
-              existingPrWorkspace,
-            ),
+            detail: duplicatePullRequestWorkspaceDetail(requestedPullRequest, existingPrWorkspace),
           });
         }
       } else if (requestedPullRequest) {
@@ -637,10 +635,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: duplicatePullRequestWorkspaceDetail(
-              requestedPullRequest,
-              existingPrWorkspace,
-            ),
+            detail: duplicatePullRequestWorkspaceDetail(requestedPullRequest, existingPrWorkspace),
           });
         }
       }
@@ -826,10 +821,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (existingPrWorkspace) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: duplicatePullRequestWorkspaceDetail(
-              command.lastKnownPr,
-              existingPrWorkspace,
-            ),
+            detail: duplicatePullRequestWorkspaceDetail(command.lastKnownPr, existingPrWorkspace),
           });
         }
       }
@@ -897,6 +889,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: command.createdAt,
           archivedAt: command.state === "archived" ? command.createdAt : null,
           deletedAt: null,
+        },
+      };
+    }
+
+    case "workspace.provision.request": {
+      const workspace = yield* requireWorkspace({
+        readModel,
+        command,
+        workspaceId: command.workspaceId,
+      });
+      if (
+        workspace.kind !== "managed" ||
+        workspace.sourceKind !== "pull-request" ||
+        workspace.state !== "error" ||
+        workspace.activeOperation !== null
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workspace '${workspace.id}' cannot retry pull request provisioning while ${workspace.state}.`,
+        });
+      }
+      if (workspace.lifecycleGeneration !== command.expectedGeneration) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Stale provision request for workspace '${workspace.id}' was rejected.`,
+        });
+      }
+      const generation = workspace.lifecycleGeneration + 1;
+      return {
+        ...withEventBase({
+          aggregateKind: "workspace",
+          aggregateId: workspace.id,
+          occurredAt: command.requestedAt,
+          commandId: command.commandId,
+        }),
+        type: "workspace.provision-requested",
+        payload: {
+          workspaceId: workspace.id,
+          operationId: command.operationId,
+          generation,
+          requestedAt: command.requestedAt,
         },
       };
     }

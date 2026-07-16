@@ -1,10 +1,7 @@
 import { ProjectId, WorktreeWorkspaceId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  buildWorkspaceProjectRunInput,
-  selectPrimaryProjectRunCommand,
-} from "./projectRunTargets";
+import { buildWorkspaceProjectRunInput, selectPrimaryProjectRunCommand } from "./projectRunTargets";
 
 describe("selectPrimaryProjectRunCommand", () => {
   it("prefers a saved regular project script over discovered dev", () => {

@@ -1045,11 +1045,7 @@ describe("chat/editor shortcuts", () => {
 
     // macOS: Cmd-chords never reach the shell, so creating a new surface still works.
     assert.strictEqual(
-      resolveShortcutCommand(
-        event({ key: "t", metaKey: true }),
-        DEFAULT_BINDINGS,
-        macTerminal,
-      ),
+      resolveShortcutCommand(event({ key: "t", metaKey: true }), DEFAULT_BINDINGS, macTerminal),
       "chat.newConversation",
     );
     assert.strictEqual(
@@ -1087,11 +1083,7 @@ describe("chat/editor shortcuts", () => {
 
     // Linux/Windows: the same chords are real shell input, so terminal focus blocks them.
     assert.isNull(
-      resolveShortcutCommand(
-        event({ key: "t", ctrlKey: true }),
-        DEFAULT_BINDINGS,
-        linuxTerminal,
-      ),
+      resolveShortcutCommand(event({ key: "t", ctrlKey: true }), DEFAULT_BINDINGS, linuxTerminal),
     );
     assert.isNull(
       resolveShortcutCommand(

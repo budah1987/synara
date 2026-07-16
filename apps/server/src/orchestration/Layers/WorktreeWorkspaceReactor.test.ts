@@ -615,7 +615,7 @@ describe("WorktreeWorkspaceReactor", () => {
     }
   });
 
-  it("materializes and reuses a fork pull request at the deterministic managed path", async () => {
+  it("resumes and reuses a generation-fenced PR retry at the deterministic managed path", async () => {
     const root = mkdtempSync(join(tmpdir(), "synara-pr-reactor-"));
     try {
       const repository = join(root, "repository");
@@ -625,7 +625,9 @@ describe("WorktreeWorkspaceReactor", () => {
       execFileSync("sh", ["-c", "printf base > fixture.txt"], { cwd: repository });
       execFileSync("git", ["-C", repository, "add", "fixture.txt"]);
       execFileSync("git", ["-C", repository, "commit", "-m", "base"]);
-      execFileSync("git", ["-C", repository, "branch", "develop"]);
+      const targetCommit = execFileSync("git", ["-C", repository, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
 
       const now = new Date().toISOString();
       const projectId = ProjectId.makeUnsafe("project-pr-reactor");
@@ -679,10 +681,10 @@ describe("WorktreeWorkspaceReactor", () => {
               state: "open",
             },
             isPinned: false,
-            lifecycleGeneration: 1,
+            lifecycleGeneration: 2,
             activeOperation: {
               id: operationId,
-              generation: 1,
+              generation: 2,
               kind: "provision",
               stage: "intent-recorded",
               startedAt: now,
@@ -712,7 +714,7 @@ describe("WorktreeWorkspaceReactor", () => {
               "-b",
               "synara/pr-42/fork-head",
               managedPath,
-              "develop",
+              "main",
             ]);
           }
           return {
@@ -731,6 +733,7 @@ describe("WorktreeWorkspaceReactor", () => {
             },
             branch: "synara/pr-42/fork-head",
             worktreePath: managedPath,
+            targetResolvedCommit: targetCommit,
           };
         });
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
@@ -799,8 +802,10 @@ describe("WorktreeWorkspaceReactor", () => {
       expect(completions[0]).toMatchObject({
         workspaceId,
         operationId,
+        generation: 2,
         path: managedPath,
         branch: "synara/pr-42/fork-head",
+        targetResolvedCommit: targetCommit,
         targetRef: "develop",
         lastKnownPr: {
           number: 42,
@@ -989,7 +994,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const projectId = ProjectId.makeUnsafe("project-archive-reactor");
       const workspaceId = WorktreeWorkspaceId.makeUnsafe("workspace-archive-reactor");
       const operationId = WorkspaceOperationId.makeUnsafe("operation-archive-reactor");
-      const readModel: OrchestrationReadModel = {
+      let readModel: OrchestrationReadModel = {
         snapshotSequence: 1,
         projects: [
           {
@@ -1106,19 +1111,26 @@ describe("WorktreeWorkspaceReactor", () => {
       ).toBeDefined();
 
       const restoreOperationId = WorkspaceOperationId.makeUnsafe("operation-restore-reactor");
-      const archivedWorkspace = readModel.workspaces[0]!;
-      readModel.workspaces[0] = {
-        ...archivedWorkspace,
-        state: "provisioning",
-        lifecycleGeneration: 3,
-        activeOperation: {
-          id: restoreOperationId,
-          generation: 3,
-          kind: "restore",
-          stage: "intent-recorded",
-          startedAt: now,
-        },
-        archivedAt: now,
+      const archivedWorkspace = readModel.workspaces?.[0];
+      expect(archivedWorkspace).toBeDefined();
+      readModel = {
+        ...readModel,
+        workspaces: [
+          {
+            ...archivedWorkspace!,
+            state: "provisioning",
+            lifecycleGeneration: 3,
+            activeOperation: {
+              id: restoreOperationId,
+              generation: 3,
+              kind: "restore",
+              stage: "intent-recorded",
+              startedAt: now,
+            },
+            archivedAt: now,
+          },
+          ...(readModel.workspaces?.slice(1) ?? []),
+        ],
       };
       commands.length = 0;
 

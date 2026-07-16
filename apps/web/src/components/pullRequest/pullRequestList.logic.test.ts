@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { PullRequestActor, PullRequestListEntry } from "@synara/contracts";
+import {
+  type OrchestrationWorktreeWorkspace,
+  type PullRequestActor,
+  type PullRequestListEntry,
+  ProjectId,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 
 import {
   countUniqueViewerReviewRequests,
@@ -335,9 +341,9 @@ describe("matchesPullRequestSearchQuery", () => {
 });
 
 describe("pullRequestWorkspaceAssociation", () => {
-  const workspace = {
-    id: "workspace-1",
-    projectId: "project-1",
+  const workspace: OrchestrationWorktreeWorkspace = {
+    id: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
+    projectId: ProjectId.makeUnsafe("project-1"),
     repositoryIdentity: "github.com/acme/widgets",
     kind: "managed",
     state: "ready",
@@ -350,7 +356,7 @@ describe("pullRequestWorkspaceAssociation", () => {
     createdFromCommit: null,
     sourceKind: "pull-request",
     sourceRef: "https://github.com/acme/widgets/pull/1",
-    setupStatus: "ready",
+    setupStatus: "succeeded",
     setupError: null,
     setupLogId: null,
     lastKnownPr: null,
@@ -363,7 +369,7 @@ describe("pullRequestWorkspaceAssociation", () => {
     updatedAt: "2026-07-16T00:00:00.000Z",
     archivedAt: null,
     deletedAt: null,
-  } as const;
+  };
 
   it("marks active and archived workspaces without excluding archived records", () => {
     expect(pullRequestWorkspaceAssociation(makeEntry(), [workspace])).toBe("active");
@@ -377,8 +383,12 @@ describe("pullRequestWorkspaceAssociation", () => {
   it("does not associate another project or deleted workspace", () => {
     expect(
       pullRequestWorkspaceAssociation(makeEntry(), [
-        { ...workspace, projectId: "project-2" },
-        { ...workspace, id: "workspace-2", deletedAt: "2026-07-16T01:00:00.000Z" },
+        { ...workspace, projectId: ProjectId.makeUnsafe("project-2") },
+        {
+          ...workspace,
+          id: WorktreeWorkspaceId.makeUnsafe("workspace-2"),
+          deletedAt: "2026-07-16T01:00:00.000Z",
+        },
       ]),
     ).toBeNull();
   });

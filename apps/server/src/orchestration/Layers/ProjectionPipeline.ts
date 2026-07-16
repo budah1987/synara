@@ -181,6 +181,7 @@ const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
 const WORKSPACE_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
   "workspace.created",
   "workspace.meta-updated",
+  "workspace.provision-requested",
   "workspace.archive-requested",
   "workspace.archived",
   "workspace.restore-requested",
@@ -703,9 +704,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.lastKnownPr !== undefined
               ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
-            ...(event.payload.isPinned !== undefined
-              ? { isPinned: event.payload.isPinned }
-              : {}),
+            ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
             mutationRevision: event.payload.mutationRevision,
             updatedAt: event.payload.updatedAt,
           });
@@ -734,6 +733,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "workspace.provision-requested":
         case "workspace.archive-requested":
         case "workspace.restore-requested": {
           const existing = yield* projectionWorktreeWorkspaceRepository.getById({
@@ -747,7 +747,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             activeOperation: {
               id: event.payload.operationId,
               generation: event.payload.generation,
-              kind: event.type === "workspace.archive-requested" ? "archive" : "restore",
+              kind:
+                event.type === "workspace.archive-requested"
+                  ? "archive"
+                  : event.type === "workspace.restore-requested"
+                    ? "restore"
+                    : "provision",
               stage:
                 event.type === "workspace.archive-requested" && event.payload.confirmedWarnings
                   ? "intent-confirmed"

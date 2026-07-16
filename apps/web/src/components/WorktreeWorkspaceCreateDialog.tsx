@@ -107,9 +107,7 @@ function PullRequestRow({
         />
       </span>
       <span className="flex min-w-0 items-center gap-1.5">
-        <span className="min-w-0 truncate text-xs font-medium leading-4">
-          {pullRequest.title}
-        </span>
+        <span className="min-w-0 truncate text-xs font-medium leading-4">{pullRequest.title}</span>
         {workspaceAssociation ? (
           <span className="shrink-0 rounded-full bg-foreground/7 px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground">
             {workspaceAssociation === "archived" ? "Archived workspace" : "In Synara"}
@@ -172,8 +170,7 @@ export function WorktreeWorkspaceCreateDialog({
   const [repositoryTargetRef, setRepositoryTargetRef] = useState(defaultTargetRef ?? "HEAD");
   const [branchQuery, setBranchQuery] = useState("");
   const [pullRequestQuery, setPullRequestQuery] = useState("");
-  const [pullRequestFilter, setPullRequestFilter] =
-    useState<GitPullRequestListFilter>("reviewing");
+  const [pullRequestFilter, setPullRequestFilter] = useState<GitPullRequestListFilter>("reviewing");
   const [pullRequestReference, setPullRequestReference] = useState("");
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
@@ -192,9 +189,9 @@ export function WorktreeWorkspaceCreateDialog({
     ...pullRequestsListQueryOptions({ state: pullRequestScope.state, projectId }),
     enabled: pullRequestQueryEnabled,
   });
-  const pullRequestSupersetTruncated = (
-    pullRequestListQuery.data?.repositoryBatches ?? []
-  ).some((batch) => batch.truncated);
+  const pullRequestSupersetTruncated = (pullRequestListQuery.data?.repositoryBatches ?? []).some(
+    (batch) => batch.truncated,
+  );
   const needsExactPullRequestInvolvement = shouldLoadExactPullRequestInvolvement({
     ...pullRequestScope,
     supersetTruncated: pullRequestSupersetTruncated,
@@ -230,11 +227,7 @@ export function WorktreeWorkspaceCreateDialog({
         additions: entry.additions,
         deletions: entry.deletions,
       })),
-    [
-      activePullRequestList,
-      pullRequestListQuery.data?.viewer,
-      pullRequestScope.involvement,
-    ],
+    [activePullRequestList, pullRequestListQuery.data?.viewer, pullRequestScope.involvement],
   );
   const isLoadingPullRequests =
     pullRequestQueryEnabled &&

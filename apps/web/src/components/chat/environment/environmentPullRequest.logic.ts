@@ -87,18 +87,18 @@ export interface PullRequestDiffStat {
 // Null when gh reported no diff sizes at all, so the panel can omit the row instead of
 // showing a misleading "+0 −0".
 export function summarizePullRequestDiffStat(pr: {
-  additions: number | null;
-  deletions: number | null;
-  changedFiles: number | null;
+  additions?: number | null | undefined;
+  deletions?: number | null | undefined;
+  changedFiles?: number | null | undefined;
 }): PullRequestDiffStat | null {
-  if (pr.additions === null && pr.deletions === null && pr.changedFiles === null) {
+  if (pr.additions == null && pr.deletions == null && pr.changedFiles == null) {
     return null;
   }
   return {
     additions: pr.additions ?? 0,
     deletions: pr.deletions ?? 0,
     filesLabel:
-      pr.changedFiles === null ? null : `${pr.changedFiles} ${pluralize(pr.changedFiles, "file")}`,
+      pr.changedFiles == null ? null : `${pr.changedFiles} ${pluralize(pr.changedFiles, "file")}`,
   };
 }
 
@@ -225,9 +225,9 @@ export function buildReviewPullRequestPrompt(input: {
   commentsTruncated?: boolean;
   commentsIncomplete?: boolean;
 }): string {
-  const checks = (input.checks ?? []).slice(0, REVIEW_PROMPT_MAX_CHECKS).map(
-    (check) => `- ${formatFixPromptInlineField(check.name)}: ${check.status}`,
-  );
+  const checks = (input.checks ?? [])
+    .slice(0, REVIEW_PROMPT_MAX_CHECKS)
+    .map((check) => `- ${formatFixPromptInlineField(check.name)}: ${check.status}`);
   const comments = (input.comments ?? [])
     .filter(
       (comment) =>
@@ -236,9 +236,7 @@ export function buildReviewPullRequestPrompt(input: {
     )
     .slice(0, REVIEW_PROMPT_MAX_COMMENTS)
     .map((comment, index) => {
-      const location = comment.path
-        ? ` on ${formatFixPromptInlineField(comment.path)}`
-        : "";
+      const location = comment.path ? ` on ${formatFixPromptInlineField(comment.path)}` : "";
       const body = truncate(comment.body.trim(), FIX_PROMPT_FIELD_MAX_LENGTH);
       return `${index + 1}. Review finding${location}:\n> ${body.replace(/\n/g, "\n> ")}`;
     });
@@ -253,8 +251,8 @@ export function buildReviewPullRequestPrompt(input: {
     input.comments === undefined
       ? "Review comments were not loaded in this entry point; inspect the live PR state."
       : comments.length > 0
-      ? `Existing review context:\n${comments.join("\n")}`
-      : "Existing review context: no unresolved findings were reported.",
+        ? `Existing review context:\n${comments.join("\n")}`
+        : "Existing review context: no unresolved findings were reported.",
     input.commentsTruncated || input.commentsIncomplete
       ? "GitHub reported only a partial comment set, so inspect the full committed diff and do not assume this list is complete."
       : null,

@@ -23,10 +23,7 @@ export type WorktreeWorkspaceRowProps = {
   isActive: boolean;
   openConversationCount: number;
   contextMenuActions: WorktreeWorkspaceContextMenuActions;
-  hoverCard: Omit<
-    WorktreeWorkspaceHoverCardContentProps,
-    "title" | "openConversationCount"
-  >;
+  hoverCard: Omit<WorktreeWorkspaceHoverCardContentProps, "title" | "openConversationCount">;
   trailing?: ReactNode;
   onOpenWorkspace: (workspace: OrchestrationWorktreeWorkspace) => void;
   onRenameWorkspace?: (workspace: OrchestrationWorktreeWorkspace) => void;

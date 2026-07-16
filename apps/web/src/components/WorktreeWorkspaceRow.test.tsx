@@ -43,9 +43,7 @@ describe("WorktreeWorkspaceRow", () => {
     );
 
     expect(markup).toContain('aria-label="Open Empty workspace"');
-    const rowButton = markup.match(
-      /<button[^>]*aria-label="Open Empty workspace"[^>]*>/,
-    )?.[0];
+    const rowButton = markup.match(/<button[^>]*aria-label="Open Empty workspace"[^>]*>/)?.[0];
     expect(rowButton).toBeDefined();
     expect(rowButton).not.toMatch(/\sdisabled(?:=|\s|>)/);
     expect(markup).toContain('data-slot="worktree-row-trailing"');

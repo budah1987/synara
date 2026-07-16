@@ -40,7 +40,7 @@ import {
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
-import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
+import { GitCore } from "./git/Services/GitCore";
 import { GitHubCli } from "./git/Services/GitHubCli";
 import { GitManager } from "./git/Services/GitManager";
 import { GitHubCliError } from "./git/Errors";
@@ -612,6 +612,8 @@ export const makeWsRpcLayer = () =>
       const requireWorkspaceReadyForRuntime = (input: {
         readonly threadId?: string;
         readonly workspaceId?: string | null;
+        readonly projectId?: string;
+        readonly cwd?: string;
       }) =>
         orchestrationEngine.getReadModel().pipe(
           Effect.flatMap((readModel) => {
@@ -624,15 +626,24 @@ export const makeWsRpcLayer = () =>
             const workspace = (readModel.workspaces ?? []).find(
               (candidate) => candidate.id === workspaceId,
             );
-            return workspace?.state === "ready"
-              ? Effect.void
-              : Effect.fail(
-                  new Error(
-                    workspace
-                      ? `Workspace '${workspace.title}' cannot start a runtime while ${workspace.state}.`
-                      : "The workspace is unavailable.",
-                  ),
-                );
+            if (!workspace) return Effect.fail(new Error("The workspace is unavailable."));
+            if (workspace.state !== "ready") {
+              return Effect.fail(
+                new Error(
+                  `Workspace '${workspace.title}' cannot start a runtime while ${workspace.state}.`,
+                ),
+              );
+            }
+            if (input.projectId && workspace.projectId !== input.projectId) {
+              return Effect.fail(new Error("The workspace does not belong to this project."));
+            }
+            if (
+              input.cwd &&
+              (!workspace.path || path.resolve(workspace.path) !== path.resolve(input.cwd))
+            ) {
+              return Effect.fail(new Error("The runtime directory does not match the workspace."));
+            }
+            return Effect.void;
           }),
         );
 
@@ -842,9 +853,15 @@ export const makeWsRpcLayer = () =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
         [WS_METHODS.projectsRunDevServer]: (input) =>
           rpcEffect(
-            requireWorkspaceReadyForRuntime({ workspaceId: input.workspaceId }).pipe(
-              Effect.andThen(devServerManager.run(input)),
-            ),
+            requireWorkspaceReadyForRuntime(
+              input.workspaceId == null
+                ? {}
+                : {
+                    workspaceId: input.workspaceId,
+                    projectId: input.projectId,
+                    cwd: input.cwd,
+                  },
+            ).pipe(Effect.andThen(devServerManager.run(input))),
             "Failed to start dev server",
           ),
         [WS_METHODS.projectsStopDevServer]: (input) =>

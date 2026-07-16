@@ -110,6 +110,28 @@ async function readyWorkspaceSnapshot(input: {
   return input.api.orchestration.getWorkspaceShellSnapshot();
 }
 
+async function retryFailedPullRequestProvision(input: {
+  api: NativeApi;
+  workspace: OrchestrationWorktreeWorkspace;
+}): Promise<void> {
+  try {
+    await input.api.orchestration.dispatchCommand({
+      type: "workspace.provision.request",
+      commandId: newCommandId(),
+      workspaceId: input.workspace.id,
+      operationId: WorkspaceOperationId.makeUnsafe(randomUUID()),
+      expectedGeneration: input.workspace.lifecycleGeneration,
+      requestedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    // A second entry point can win the generation-fenced retry race. Continue only when the
+    // server's durable state proves that provisioning already restarted or completed.
+    const snapshot = await input.api.orchestration.getWorkspaceShellSnapshot();
+    const current = snapshot.workspaces.find((workspace) => workspace.id === input.workspace.id);
+    if (current?.state !== "provisioning" && current?.state !== "ready") throw error;
+  }
+}
+
 async function useExistingWorkspace(input: {
   api: NativeApi;
   workspace: OrchestrationWorktreeWorkspace;
@@ -121,14 +143,14 @@ async function useExistingWorkspace(input: {
 }): Promise<PullRequestWorkspaceResult> {
   let association: PullRequestWorkspaceResult["association"] = "active";
   const archived = input.workspace.state === "archived" || input.workspace.archivedAt !== null;
-  if (input.workspace.state === "restoring") {
-    association = "restored";
-  } else if (archived) {
+  if (archived) {
     const restore = await requestWorkspaceRestore({ api: input.api, workspace: input.workspace });
     if (restore === "cancelled") throw new Error("Workspace restore was cancelled.");
     association = "restored";
   } else if (input.workspace.state === "archiving") {
     throw new Error("This pull request workspace is still being archived. Try again shortly.");
+  } else if (input.workspace.state === "error") {
+    await retryFailedPullRequestProvision({ api: input.api, workspace: input.workspace });
   }
 
   let snapshot = await readyWorkspaceSnapshot({ api: input.api, workspace: input.workspace });
@@ -202,8 +224,7 @@ export async function openPullRequestWorkspace(input: {
     input.project.id,
     pullRequest,
   );
-  const conversationTitle =
-    input.conversationTitle?.trim() || `Review PR #${pullRequest.number}`;
+  const conversationTitle = input.conversationTitle?.trim() || `Review PR #${pullRequest.number}`;
 
   if (existing) {
     const result = await useExistingWorkspace({
@@ -213,7 +234,9 @@ export async function openPullRequestWorkspace(input: {
       modelSelection,
       intent: input.intent,
       conversationTitle,
-      preferredThreadId: input.preferredThreadId,
+      ...(input.preferredThreadId !== undefined
+        ? { preferredThreadId: input.preferredThreadId }
+        : {}),
     });
     input.onSnapshot?.(result.snapshot);
     return result;
@@ -257,7 +280,9 @@ export async function openPullRequestWorkspace(input: {
       modelSelection,
       intent: input.intent,
       conversationTitle,
-      preferredThreadId: input.preferredThreadId,
+      ...(input.preferredThreadId !== undefined
+        ? { preferredThreadId: input.preferredThreadId }
+        : {}),
     });
     input.onSnapshot?.(result.snapshot);
     return result;

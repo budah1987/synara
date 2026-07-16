@@ -735,7 +735,10 @@ function normalizePullRequestReviewComments(
 }
 
 function getGraphQlErrorDetail(raw: {
-  readonly errors?: ReadonlyArray<{ readonly message?: string | null } | null> | null;
+  readonly errors?:
+    | ReadonlyArray<{ readonly message?: string | null | undefined } | null>
+    | null
+    | undefined;
 }): string | null {
   const messages =
     raw.errors
@@ -892,16 +895,16 @@ const makeGitHubCli = Effect.sync(() => {
       return yield* Effect.tryPromise({
         try: (signal) =>
           runProcess("gh", input.args, {
-          cwd: input.cwd,
-          timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-          signal,
-          // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
-          // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
-          env,
-          ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
-          ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
-          ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
-        }),
+            cwd: input.cwd,
+            timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            signal,
+            // Repository discovery accepts GitHub.com remotes only. Pin the CLI host as well so a
+            // caller-level GH_HOST override cannot redirect commands that lack a --hostname flag.
+            env,
+            ...(input.maxBufferBytes !== undefined ? { maxBufferBytes: input.maxBufferBytes } : {}),
+            ...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
+            ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+          }),
         catch: (error) => normalizeGitHubCliError("execute", error),
       });
     });
@@ -1234,14 +1237,7 @@ const makeGitHubCli = Effect.sync(() => {
     getViewerLogin: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "api",
-          "user",
-          "--hostname",
-          input.account?.host ?? GITHUB_HOST,
-          "--jq",
-          ".login",
-        ],
+        args: ["api", "user", "--hostname", input.account?.host ?? GITHUB_HOST, "--jq", ".login"],
         ...(input.account ? { account: input.account } : {}),
       }).pipe(
         Effect.flatMap((result) => {

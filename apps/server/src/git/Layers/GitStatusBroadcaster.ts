@@ -216,10 +216,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
     const refreshInput = (input: GitStatusInput) => {
       const normalizedInput = rememberInput(input);
       const cacheKey = statusCacheKey(normalizedInput);
-      return withFailureBackoff(
-        cacheKey,
-        loadStatus(normalizedInput, cacheKey, { publish: true }),
-      );
+      return withFailureBackoff(cacheKey, loadStatus(normalizedInput, cacheKey, { publish: true }));
     };
 
     const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = (cwd) =>
@@ -230,9 +227,7 @@ export const GitStatusBroadcasterLive = Layer.effect(
         const inputs = [
           defaultInput,
           ...Array.from(inputsByCacheKey.entries())
-            .filter(
-              ([cacheKey, input]) => cacheKey !== defaultKey && input.cwd === normalizedCwd,
-            )
+            .filter(([cacheKey, input]) => cacheKey !== defaultKey && input.cwd === normalizedCwd)
             .map(([, input]) => input),
         ];
         const exits = yield* Effect.all(

@@ -1120,9 +1120,16 @@ export const WorktreeWorkspaceArchiveRequestCommand = Schema.Struct({
   workspaceId: WorktreeWorkspaceId,
   operationId: WorkspaceOperationId,
   expectedGeneration: NonNegativeInt,
-  confirmedWarnings: Schema.optional(Schema.Boolean).pipe(
-    Schema.withDecodingDefault(() => false),
-  ),
+  confirmedWarnings: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  requestedAt: IsoDateTime,
+});
+
+export const WorktreeWorkspaceProvisionRequestCommand = Schema.Struct({
+  type: Schema.Literal("workspace.provision.request"),
+  commandId: CommandId,
+  workspaceId: WorktreeWorkspaceId,
+  operationId: WorkspaceOperationId,
+  expectedGeneration: NonNegativeInt,
   requestedAt: IsoDateTime,
 });
 
@@ -1527,6 +1534,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   WorktreeWorkspaceAttachCommand,
   WorktreeWorkspaceConversationCreateCommand,
   WorktreeWorkspaceMetaUpdateCommand,
+  WorktreeWorkspaceProvisionRequestCommand,
   WorktreeWorkspaceArchiveRequestCommand,
   WorktreeWorkspaceRestoreRequestCommand,
   ThreadCreateCommand,
@@ -1566,6 +1574,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   WorktreeWorkspaceAttachCommand,
   WorktreeWorkspaceConversationCreateCommand,
   WorktreeWorkspaceMetaUpdateCommand,
+  WorktreeWorkspaceProvisionRequestCommand,
   WorktreeWorkspaceArchiveRequestCommand,
   WorktreeWorkspaceRestoreRequestCommand,
   ThreadCreateCommand,
@@ -1790,6 +1799,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.deleted",
   "workspace.created",
   "workspace.meta-updated",
+  "workspace.provision-requested",
   "workspace.archive-requested",
   "workspace.archived",
   "workspace.restore-requested",
@@ -2323,6 +2333,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("workspace.provision-requested"),
+    payload: WorktreeWorkspaceLifecycleRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("workspace.archive-requested"),
     payload: WorktreeWorkspaceLifecycleRequestedPayload,
   }),
@@ -2729,8 +2744,7 @@ export const WorkspaceLifecyclePreflightIssue = Schema.Struct({
   ]),
   message: TrimmedNonEmptyString,
 });
-export type WorkspaceLifecyclePreflightIssue =
-  typeof WorkspaceLifecyclePreflightIssue.Type;
+export type WorkspaceLifecyclePreflightIssue = typeof WorkspaceLifecyclePreflightIssue.Type;
 
 export const WorkspaceLifecyclePreflightResult = Schema.Struct({
   workspaceId: WorktreeWorkspaceId,
@@ -2741,8 +2755,7 @@ export const WorkspaceLifecyclePreflightResult = Schema.Struct({
   blockers: Schema.Array(WorkspaceLifecyclePreflightIssue),
   warnings: Schema.Array(WorkspaceLifecyclePreflightIssue),
 });
-export type WorkspaceLifecyclePreflightResult =
-  typeof WorkspaceLifecyclePreflightResult.Type;
+export type WorkspaceLifecyclePreflightResult = typeof WorkspaceLifecyclePreflightResult.Type;
 
 export const OrchestrationRpcSchemas = {
   getCapabilities: {

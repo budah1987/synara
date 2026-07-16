@@ -1,4 +1,8 @@
-import type { OrchestrationWorktreeWorkspace, ProjectId } from "@synara/contracts";
+import {
+  type OrchestrationWorktreeWorkspace,
+  type ProjectId,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -15,7 +19,7 @@ function workspace(
   overrides: Partial<OrchestrationWorktreeWorkspace> = {},
 ): OrchestrationWorktreeWorkspace {
   return {
-    id: "workspace-1",
+    id: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
     projectId: PROJECT_ID,
     repositoryIdentity: "github.com/example/repo",
     kind: "managed",
@@ -50,16 +54,31 @@ describe("archived workspace presentation", () => {
   it("filters to the selected project, excludes repository roots, and sorts newest first", () => {
     const result = listArchivedWorkspaces(
       [
-        workspace({ id: "older", title: "Older", archivedAt: "2026-07-15T12:00:00.000Z" }),
-        workspace({ id: "root", kind: "repository-root" }),
-        workspace({ id: "active", state: "ready", archivedAt: null }),
-        workspace({ id: "deleted", deletedAt: "2026-07-16T13:00:00.000Z" }),
         workspace({
-          id: "other-project",
+          id: WorktreeWorkspaceId.makeUnsafe("older"),
+          title: "Older",
+          archivedAt: "2026-07-15T12:00:00.000Z",
+        }),
+        workspace({ id: WorktreeWorkspaceId.makeUnsafe("root"), kind: "repository-root" }),
+        workspace({
+          id: WorktreeWorkspaceId.makeUnsafe("active"),
+          state: "ready",
+          archivedAt: null,
+        }),
+        workspace({
+          id: WorktreeWorkspaceId.makeUnsafe("deleted"),
+          deletedAt: "2026-07-16T13:00:00.000Z",
+        }),
+        workspace({
+          id: WorktreeWorkspaceId.makeUnsafe("other-project"),
           projectId: "project-2" as ProjectId,
           archivedAt: "2026-07-17T12:00:00.000Z",
         }),
-        workspace({ id: "newer", title: "Newer", archivedAt: "2026-07-16T12:00:00.000Z" }),
+        workspace({
+          id: WorktreeWorkspaceId.makeUnsafe("newer"),
+          title: "Newer",
+          archivedAt: "2026-07-16T12:00:00.000Z",
+        }),
       ],
       PROJECT_ID,
     );

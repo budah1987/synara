@@ -1,4 +1,8 @@
-import type { OrchestrationWorktreeWorkspace, ProjectId } from "@synara/contracts";
+import {
+  type OrchestrationWorktreeWorkspace,
+  type ProjectId,
+  WorktreeWorkspaceId,
+} from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,7 +13,7 @@ import {
 
 const PROJECT_ID = "project-1" as ProjectId;
 const archivedWorkspace = {
-  id: "workspace-1",
+  id: WorktreeWorkspaceId.makeUnsafe("workspace-1"),
   projectId: PROJECT_ID,
   kind: "managed",
   state: "archived",
@@ -34,7 +38,7 @@ describe("ArchivedWorkspacesDialog", () => {
           archivedWorkspace,
           {
             ...archivedWorkspace,
-            id: "workspace-root",
+            id: WorktreeWorkspaceId.makeUnsafe("workspace-root"),
             kind: "repository-root",
             title: "Repository root",
           },

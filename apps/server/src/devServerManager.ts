@@ -26,7 +26,7 @@ import {
   projectDevServerTargetKey,
   type ProjectDevServerTargetKey,
 } from "@synara/shared/projectDevServers";
-import { Effect, Layer, PubSub, Ref, ServiceMap, Stream } from "effect";
+import { Effect, Layer, PubSub, Ref, Semaphore, ServiceMap, Stream } from "effect";
 
 import { TerminalManager, type TerminalError } from "./terminal/Services/Manager";
 
@@ -85,7 +85,9 @@ export interface DevServerManagerShape {
     input: ProjectRunDevServerInput,
   ) => Effect.Effect<ProjectRunDevServerResult, TerminalError>;
   /** Stop one exact project/workspace target. Resolves with whether it was running. */
-  readonly stop: (input: ProjectStopDevServerInput) => Effect.Effect<ProjectStopDevServerResult>;
+  readonly stop: (
+    input: ProjectStopDevServerInput,
+  ) => Effect.Effect<ProjectStopDevServerResult, TerminalError>;
   /** Snapshot of all currently tracked dev servers. */
   readonly list: Effect.Effect<ProjectListDevServersResult>;
   /** Live stream of dev-server lifecycle events (excludes the initial snapshot). */
@@ -104,40 +106,62 @@ export const DevServerManagerLive = Layer.effect(
       PubSub.unbounded<ProjectDevServerEvent>(),
       PubSub.shutdown,
     );
-    const registry = yield* Ref.make<
-      Record<ProjectDevServerTargetKey, TrackedProjectDevServer>
-    >({});
+    const registry = yield* Ref.make<Record<ProjectDevServerTargetKey, TrackedProjectDevServer>>(
+      {},
+    );
+    const targetLocks = new Map<ProjectDevServerTargetKey, Semaphore.Semaphore>();
+
+    const withTargetLock = <A, E, R>(
+      targetKey: ProjectDevServerTargetKey,
+      effect: Effect.Effect<A, E, R>,
+    ) => {
+      let lock = targetLocks.get(targetKey);
+      if (!lock) {
+        lock = Semaphore.makeUnsafe(1);
+        targetLocks.set(targetKey, lock);
+      }
+      return lock.withPermits(1)(effect);
+    };
 
     const publish = (event: ProjectDevServerEvent) => PubSub.publish(pubsub, event);
 
-    // Reap a tracked dev server whose PTY exited or errored. Guarded so that a
-    // deliberate stop (which removes the entry first) cannot double-publish and
-    // an exit from another project/workspace target cannot remove this one.
+    // Reap a tracked dev server whose PTY exited or errored. The target lock and
+    // thread identity guard keep deliberate stops and replacements from
+    // double-publishing or removing a newer run.
     const reapExited = (threadId: string, detail: ProjectDevServerExitDetail) =>
-      Ref.modify(registry, (current) => {
-        const matchedEntry = Object.entries(current).find(
+      Effect.gen(function* () {
+        const matchedEntry = Object.entries(yield* Ref.get(registry)).find(
           ([, tracked]) => tracked.threadId === threadId,
         );
         if (!matchedEntry) {
-          return [null, current] as const;
+          return;
         }
-        const [rawTargetKey, tracked] = matchedEntry;
-        const next = { ...current };
-        delete next[rawTargetKey as ProjectDevServerTargetKey];
-        return [tracked.server, next] as const;
-      }).pipe(
-        Effect.flatMap((removed) =>
-          removed
-            ? publish({
-                type: "removed",
-                projectId: removed.projectId,
-                workspaceId: removed.workspaceId,
-                reason: "exited",
-                ...detail,
-              })
-            : Effect.void,
-        ),
-      );
+        const targetKey = matchedEntry[0] as ProjectDevServerTargetKey;
+        yield* withTargetLock(
+          targetKey,
+          Ref.modify(registry, (current) => {
+            const tracked = current[targetKey];
+            if (!tracked || tracked.threadId !== threadId) {
+              return [null, current] as const;
+            }
+            const next = { ...current };
+            delete next[targetKey];
+            return [tracked.server, next] as const;
+          }).pipe(
+            Effect.flatMap((removed) =>
+              removed
+                ? publish({
+                    type: "removed",
+                    projectId: removed.projectId,
+                    workspaceId: removed.workspaceId,
+                    reason: "exited",
+                    ...detail,
+                  })
+                : Effect.void,
+            ),
+          ),
+        );
+      });
 
     const unsubscribe = yield* terminalManager.subscribe((event) => {
       if (event.type !== "exited" && event.type !== "error") {
@@ -151,87 +175,110 @@ export const DevServerManagerLive = Layer.effect(
     });
     yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
 
-    const run: DevServerManagerShape["run"] = (input) =>
-      Effect.gen(function* () {
-        const targetKey = projectDevServerTargetKey(input);
-
-        // If a dev server is already tracked for this exact target, tear its PTY
-        // down first so the command always lands in a fresh shell. Other
-        // workspaces in the project remain independent.
-        const existing = (yield* Ref.get(registry))[targetKey];
-        if (existing) {
-          yield* terminalManager
-            .close({ threadId: existing.threadId, deleteHistory: true })
-            .pipe(Effect.catch(() => Effect.void));
-        }
-
-        // Every launch receives a fresh terminal identity. A delayed exit from
-        // the previous PTY therefore cannot reap the replacement run.
-        const threadId = devServerThreadId();
-
-        const snapshot = yield* terminalManager.open({
-          threadId,
-          terminalId: DEFAULT_TERMINAL_ID,
-          cwd: input.cwd,
-          cols: DEV_SERVER_TERMINAL_COLS,
-          rows: DEV_SERVER_TERMINAL_ROWS,
-          // Dev servers are headless: drain + retain history, but never broadcast
-          // their continuous output to clients that have no terminal UI for them.
-          streamOutput: false,
-          ...(input.env ? { env: input.env } : {}),
-        });
-
-        yield* terminalManager.write({
-          threadId,
-          terminalId: DEFAULT_TERMINAL_ID,
-          data: `${input.command}\r`,
-        });
-
-        const server: ProjectDevServer = {
-          projectId: input.projectId,
-          workspaceId: input.workspaceId,
-          command: input.command,
-          cwd: input.cwd,
-          pid: snapshot.pid,
-          startedAt: new Date().toISOString(),
-          status: "running",
-        };
-        yield* Ref.update(registry, (current) => ({
-          ...current,
-          [targetKey]: { server, threadId },
-        }));
-        yield* publish({ type: "upserted", server });
-        return { server };
-      });
-
-    const stop: DevServerManagerShape["stop"] = (input) =>
-      Effect.gen(function* () {
-        const targetKey = projectDevServerTargetKey(input);
-        // Remove from the registry *before* closing so the PTY teardown cannot be
-        // mistaken for a crash by the reaper.
-        const removed = yield* Ref.modify(registry, (current) => {
-          const tracked = current[targetKey];
-          if (!tracked) {
-            return [null, current] as const;
+    const run: DevServerManagerShape["run"] = (input) => {
+      const targetKey = projectDevServerTargetKey(input);
+      return withTargetLock(
+        targetKey,
+        Effect.gen(function* () {
+          // If a dev server is already tracked for this exact target, tear its PTY
+          // down first so the command always lands in a fresh shell. Other
+          // workspaces in the project remain independent.
+          const existing = (yield* Ref.get(registry))[targetKey];
+          if (existing) {
+            yield* terminalManager.close({ threadId: existing.threadId, deleteHistory: true });
+            const removed = yield* Ref.modify(registry, (current) => {
+              if (current[targetKey]?.threadId !== existing.threadId) {
+                return [false, current] as const;
+              }
+              const next = { ...current };
+              delete next[targetKey];
+              return [true, next] as const;
+            });
+            if (removed) {
+              yield* publish({
+                type: "removed",
+                projectId: input.projectId,
+                workspaceId: input.workspaceId,
+                reason: "stopped",
+              });
+            }
           }
-          const next = { ...current };
-          delete next[targetKey];
-          return [tracked, next] as const;
-        });
-        if (!removed) {
-          return { stopped: false };
-        }
-        yield* publish({
-          type: "removed",
-          projectId: input.projectId,
-          workspaceId: input.workspaceId,
-          reason: "stopped",
-        });
-        yield* terminalManager
-          .close({ threadId: removed.threadId, deleteHistory: true })
-          .pipe(Effect.catch(() => Effect.void));
-        return { stopped: true };
-      });
+
+          // Every launch receives a fresh terminal identity. A delayed exit from
+          // the previous PTY therefore cannot reap the replacement run.
+          const threadId = devServerThreadId();
+
+          const snapshot = yield* terminalManager.open({
+            threadId,
+            terminalId: DEFAULT_TERMINAL_ID,
+            cwd: input.cwd,
+            cols: DEV_SERVER_TERMINAL_COLS,
+            rows: DEV_SERVER_TERMINAL_ROWS,
+            // Dev servers are headless: drain + retain history, but never broadcast
+            // their continuous output to clients that have no terminal UI for them.
+            streamOutput: false,
+            ...(input.env ? { env: input.env } : {}),
+          });
+
+          yield* terminalManager.write({
+            threadId,
+            terminalId: DEFAULT_TERMINAL_ID,
+            data: `${input.command}\r`,
+          });
+
+          const server: ProjectDevServer = {
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+            command: input.command,
+            cwd: input.cwd,
+            pid: snapshot.pid,
+            startedAt: new Date().toISOString(),
+            status: "running",
+          };
+          yield* Ref.update(registry, (current) => ({
+            ...current,
+            [targetKey]: { server, threadId },
+          }));
+          yield* publish({ type: "upserted", server });
+          return { server };
+        }),
+      );
+    };
+
+    const stop: DevServerManagerShape["stop"] = (input) => {
+      const targetKey = projectDevServerTargetKey(input);
+      return withTargetLock(
+        targetKey,
+        Effect.gen(function* () {
+          const tracked = (yield* Ref.get(registry))[targetKey];
+          if (!tracked) {
+            return { stopped: false };
+          }
+
+          // Keep the registry entry visible until PTY teardown succeeds. A close
+          // failure means the process may still be running and must remain
+          // discoverable and retryable.
+          yield* terminalManager.close({ threadId: tracked.threadId, deleteHistory: true });
+          const removed = yield* Ref.modify(registry, (current) => {
+            if (current[targetKey]?.threadId !== tracked.threadId) {
+              return [false, current] as const;
+            }
+            const next = { ...current };
+            delete next[targetKey];
+            return [true, next] as const;
+          });
+          if (removed) {
+            yield* publish({
+              type: "removed",
+              projectId: input.projectId,
+              workspaceId: input.workspaceId,
+              reason: "stopped",
+            });
+          }
+          return { stopped: true };
+        }),
+      );
+    };
 
     const list: DevServerManagerShape["list"] = Ref.get(registry).pipe(
       Effect.map((current) => ({

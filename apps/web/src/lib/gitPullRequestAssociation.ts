@@ -7,9 +7,7 @@ import {
 
 import { newCommandId } from "./utils";
 
-export function pullRequestAssociationKey(
-  pullRequest: OrchestrationThreadPullRequest,
-): string {
+export function pullRequestAssociationKey(pullRequest: OrchestrationThreadPullRequest): string {
   return JSON.stringify(pullRequest);
 }
 

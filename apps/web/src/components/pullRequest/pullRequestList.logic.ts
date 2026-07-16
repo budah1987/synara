@@ -76,9 +76,7 @@ function isEntryViewerAuthored(
   normalizedViewer: string | null,
 ): boolean {
   if (entry.viewerAuthored !== undefined) return entry.viewerAuthored;
-  return (
-    normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer
-  );
+  return normalizedViewer !== null && entry.author?.login.trim().toLowerCase() === normalizedViewer;
 }
 
 export function filterPullRequestEntriesByInvolvement(

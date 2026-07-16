@@ -330,6 +330,7 @@ function preparePullRequestThread(
     reference: string;
     mode: "local" | "worktree";
     managedWorktreePath?: string;
+    account?: GitHubAccountSelection;
   },
 ) {
   return manager.preparePullRequestThread(input);
@@ -2279,6 +2280,67 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         "--show-current",
       ])).stdout.trim();
       expect(worktreeBranch).toBe("feature/pr-worktree");
+    }),
+  );
+
+  it.effect("fetches a missing PR base with the selected account before completion", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", "release"]);
+      fs.writeFileSync(path.join(repoDir, "release.txt"), "release\n");
+      yield* runGit(repoDir, ["add", "release.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Release base"]);
+      const releaseCommit = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* runGit(repoDir, ["push", "origin", "release"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/missing-base"]);
+      fs.writeFileSync(path.join(repoDir, "feature.txt"), "feature\n");
+      yield* runGit(repoDir, ["add", "feature.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Feature head"]);
+      yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/78/head"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      yield* runGit(repoDir, ["branch", "-D", "release"]);
+      yield* runGit(repoDir, ["update-ref", "-d", "refs/remotes/origin/release"]);
+
+      const managedRoot = yield* makeTempDir("synara-managed-pr-base-");
+      const managedWorktreePath = path.join(managedRoot, "worktree");
+      const account: GitHubAccountSelection = { host: "github.com", login: "reviewer" };
+      const { manager, accountCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 78,
+            title: "Missing base PR",
+            url: "https://github.com/example-org/sample-repo/pull/78",
+            baseRefName: "release",
+            headRefName: "feature/missing-base",
+            state: "open",
+          },
+          repositoryCloneUrls: {
+            "example-org/sample-repo": { url: remoteDir, sshUrl: remoteDir },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "78",
+        mode: "worktree",
+        managedWorktreePath,
+        account,
+      });
+
+      expect(result.targetResolvedCommit).toBe(releaseCommit);
+      expect(
+        (yield* runGit(repoDir, [
+          "rev-parse",
+          "--verify",
+          "origin/release^{commit}",
+        ])).stdout.trim(),
+      ).toBe(releaseCommit);
+      expect(accountCalls).toContainEqual(account);
     }),
   );
 

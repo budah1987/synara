@@ -62,10 +62,7 @@ import {
   LinkIcon,
   XIcon,
 } from "~/lib/icons";
-import {
-  openPullRequestWorkspace,
-  pullRequestWorkspaceMetadata,
-} from "~/lib/pullRequestWorkspace";
+import { openPullRequestWorkspace, pullRequestWorkspaceMetadata } from "~/lib/pullRequestWorkspace";
 import {
   pullRequestActionMutationOptions,
   pullRequestDetailQueryOptions,
@@ -159,10 +156,7 @@ export function PullRequestDetailPanel({
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
   const project = projects.find((candidate) => candidate.id === input.projectId) ?? null;
   const associatedWorkspace = useMemo(
-    () =>
-      detail
-        ? findWorkspaceForPullRequest(workspaces, detail.projectId, detail)
-        : null,
+    () => (detail ? findWorkspaceForPullRequest(workspaces, detail.projectId, detail) : null),
     [detail, workspaces],
   );
   const associatedWorkspaceArchived =

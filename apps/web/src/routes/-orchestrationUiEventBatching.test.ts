@@ -48,7 +48,9 @@ describe("orchestration UI event batching", () => {
 
     expect(shouldFlushOrchestrationUiEvents(phrase, [phrase], flushedMessageIds)).toBe(true);
     expect(shouldFlushOrchestrationUiEvents(activityEvent(), [], flushedMessageIds)).toBe(true);
-    expect(shouldFlushOrchestrationUiEvents(completion, [completion], flushedMessageIds)).toBe(true);
+    expect(shouldFlushOrchestrationUiEvents(completion, [completion], flushedMessageIds)).toBe(
+      true,
+    );
     expect(flushedMessageIds.has("message-1")).toBe(false);
   });
 

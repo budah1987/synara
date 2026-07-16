@@ -5,14 +5,7 @@
 // Depends on: Server migrations through 053, a temporary Git repository, and a real image asset.
 
 import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,12 +108,7 @@ const seed = Effect.gen(function* () {
     )
   `;
 
-  yield* insertThread(
-    "legacy-thread-image",
-    "Upgrade smoke — image conversation",
-    "main",
-    null,
-  );
+  yield* insertThread("legacy-thread-image", "Upgrade smoke — image conversation", "main", null);
   yield* insertThread(
     "legacy-thread-rich-text",
     "Upgrade smoke — formatted conversation",

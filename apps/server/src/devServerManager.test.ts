@@ -22,6 +22,7 @@ import {
 } from "./devServerManager";
 import {
   TerminalManager,
+  TerminalError,
   type TerminalManagerShape,
 } from "./terminal/Services/Manager";
 
@@ -125,11 +126,9 @@ function workspaceTarget(workspaceId: string) {
 
 function runWithDevServerManager<A>(
   terminal: TerminalManagerShape,
-  effect: Effect.Effect<A, never, DevServerManager>,
+  effect: Effect.Effect<A, TerminalError, DevServerManager>,
 ): Promise<A> {
-  const layer = DevServerManagerLive.pipe(
-    Layer.provide(Layer.succeed(TerminalManager, terminal)),
-  );
+  const layer = DevServerManagerLive.pipe(Layer.provide(Layer.succeed(TerminalManager, terminal)));
   return Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.scoped));
 }
 
@@ -201,7 +200,7 @@ describe("findProjectDevServerForLocalServer", () => {
     ).toBe(workspace);
     expect(
       findProjectDevServerForLocalServer({
-        localServer: makeLocalServer({ cwd: "/repo/worktrees/one/apps/web", ppid: null }),
+        localServer: makeLocalServer({ cwd: "/repo/worktrees/one/apps/web" }),
         devServers: [repositoryRoot, workspace],
       }),
     ).toBe(workspace);
@@ -289,6 +288,118 @@ describe("DevServerManager", () => {
     expect(result.snapshot.servers).toMatchObject([{ workspaceId: "workspace-2" }]);
     expect(terminal.closeCalls).toHaveLength(1);
     expect(terminal.closeCalls[0]?.threadId).toBe(terminal.openCalls[0]?.threadId);
+  });
+
+  it("keeps a run registered and reports failure when terminal close fails", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-1");
+    let failClose = false;
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      close: (input) =>
+        failClose
+          ? Effect.fail(new TerminalError({ message: "PTY close failed" }))
+          : terminal.service.close(input),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...target, command: "dev one", cwd: "/repo/one" });
+        failClose = true;
+        const stopped = yield* Effect.exit(manager.stop(target));
+        const snapshot = yield* manager.list;
+        return { stopped, snapshot };
+      }),
+    );
+
+    expect(result.stopped._tag).toBe("Failure");
+    expect(result.snapshot.servers).toMatchObject([
+      { workspaceId: "workspace-1", command: "dev one" },
+    ]);
+  });
+
+  it("does not replace an existing run when closing it fails", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-1");
+    let failClose = false;
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      close: (input) =>
+        failClose
+          ? Effect.fail(new TerminalError({ message: "PTY close failed" }))
+          : terminal.service.close(input),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...target, command: "dev old", cwd: "/repo/one" });
+        failClose = true;
+        const replacement = yield* Effect.exit(
+          manager.run({ ...target, command: "dev replacement", cwd: "/repo/one" }),
+        );
+        const snapshot = yield* manager.list;
+        return { replacement, snapshot };
+      }),
+    );
+
+    expect(result.replacement._tag).toBe("Failure");
+    expect(terminal.openCalls).toHaveLength(1);
+    expect(result.snapshot.servers).toMatchObject([
+      { workspaceId: "workspace-1", command: "dev old" },
+    ]);
+  });
+
+  it("serializes concurrent run and stop operations for one target", async () => {
+    const terminal = makeTerminalManagerDouble();
+    const target = workspaceTarget("workspace-1");
+    let signalCloseStarted: () => void = () => {};
+    let releaseClose: () => void = () => {};
+    const closeStarted = new Promise<void>((resolve) => {
+      signalCloseStarted = resolve;
+    });
+    const closeReleased = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const service: TerminalManagerShape = {
+      ...terminal.service,
+      close: (input) =>
+        terminal.service.close(input).pipe(
+          Effect.tap(() => Effect.sync(signalCloseStarted)),
+          Effect.andThen(Effect.promise(() => closeReleased)),
+        ),
+    };
+
+    const result = await runWithDevServerManager(
+      service,
+      Effect.gen(function* () {
+        const manager = yield* DevServerManager;
+        yield* manager.run({ ...target, command: "dev old", cwd: "/repo/one" });
+        const replacement = yield* manager
+          .run({ ...target, command: "dev replacement", cwd: "/repo/one" })
+          .pipe(Effect.forkChild);
+        yield* Effect.promise(() => closeStarted);
+        const stopped = yield* manager.stop(target).pipe(Effect.forkChild);
+        yield* Effect.sleep("10 millis");
+        const countsWhileBlocked = {
+          close: terminal.closeCalls.length,
+          open: terminal.openCalls.length,
+        };
+        releaseClose();
+        yield* Fiber.join(replacement);
+        const stopResult = yield* Fiber.join(stopped);
+        const snapshot = yield* manager.list;
+        return { countsWhileBlocked, stopResult, snapshot };
+      }),
+    );
+
+    expect(result.countsWhileBlocked).toEqual({ close: 1, open: 1 });
+    expect(result.stopResult).toEqual({ stopped: true });
+    expect(terminal.closeCalls).toHaveLength(2);
+    expect(result.snapshot.servers).toEqual([]);
   });
 
   it("reaps only the workspace whose synthetic terminal exits and preserves exit detail", async () => {

@@ -1729,27 +1729,36 @@ export const makeGitManager = Effect.gen(function* () {
           return null;
         }
         if (input.mode !== "worktree") {
-          return yield* gitManagerError(
-            "preparePullRequestThread",
-            "A managed worktree path can only be used in worktree mode.",
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "A managed worktree path can only be used in worktree mode.",
+            ),
           );
         }
         if (!path.isAbsolute(input.managedWorktreePath)) {
-          return yield* gitManagerError(
-            "preparePullRequestThread",
-            "The managed worktree path must be absolute.",
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "The managed worktree path must be absolute.",
+            ),
           );
         }
 
-        const canonicalPath = yield* realpathNearestExisting(input.managedWorktreePath);
+        const canonicalPath = yield* realpathNearestExisting(input.managedWorktreePath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
         const relativeToRoot = path.relative(rootWorktreePath, canonicalPath);
         const isInsideRoot =
           relativeToRoot === "" ||
           (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot));
         if (isInsideRoot) {
-          return yield* gitManagerError(
-            "preparePullRequestThread",
-            "The managed worktree path must be outside the repository root.",
+          return yield* Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              "The managed worktree path must be outside the repository root.",
+            ),
           );
         }
         return canonicalPath;
@@ -1760,6 +1769,78 @@ export const makeGitManager = Effect.gen(function* () {
         ...(input.account ? { account: input.account } : {}),
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
+
+      const resolvePullRequestBaseCommit = Effect.fnUntraced(function* () {
+        const remoteNames = (yield* gitCore.execute({
+          operation: "GitManager.preparePullRequestThread.listBaseRemotes",
+          cwd: input.cwd,
+          args: ["remote"],
+        })).stdout
+          .split("\n")
+          .map((remote) => remote.trim())
+          .filter(Boolean);
+        const resolveCandidates = (candidates: readonly string[]) =>
+          Effect.gen(function* () {
+            for (const candidate of candidates) {
+              const resolved = yield* gitCore.execute({
+                operation: "GitManager.preparePullRequestThread.resolveBase",
+                cwd: input.cwd,
+                args: ["rev-parse", "--verify", `${candidate}^{commit}`],
+                allowNonZeroExit: true,
+              });
+              const commit = resolved.code === 0 ? resolved.stdout.trim() : "";
+              if (commit) return commit;
+            }
+            return null;
+          });
+        const localCommit = yield* resolveCandidates([
+          pullRequest.baseBranch,
+          ...remoteNames.map((remote) => `${remote}/${pullRequest.baseBranch}`),
+        ]);
+        if (localCommit) return localCommit;
+
+        const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+        if (!repository) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            `Could not determine the base repository for ${pullRequest.url}.`,
+          );
+        }
+        const repositoryNameWithOwner = `${repository.owner}/${repository.repo}`;
+        const cloneUrls = yield* gitHubCli.getRepositoryCloneUrls({
+          cwd: input.cwd,
+          repository: repositoryNameWithOwner,
+          ...(input.account ? { account: input.account } : {}),
+        });
+        const originRemoteUrl = yield* readConfigValueNullable(input.cwd, "remote.origin.url");
+        const remoteUrl = shouldPreferSshRemote(originRemoteUrl) ? cloneUrls.sshUrl : cloneUrls.url;
+        const remoteName = yield* gitCore.ensureRemote({
+          cwd: input.cwd,
+          preferredName: repository.owner,
+          url: remoteUrl,
+        });
+        yield* gitCore.execute({
+          operation: "GitManager.preparePullRequestThread.fetchBase",
+          cwd: input.cwd,
+          args: [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            remoteName,
+            `+refs/heads/${pullRequest.baseBranch}:refs/remotes/${remoteName}/${pullRequest.baseBranch}`,
+          ],
+          timeoutMs: 120_000,
+        });
+        const fetchedCommit = yield* resolveCandidates([`${remoteName}/${pullRequest.baseBranch}`]);
+        if (!fetchedCommit) {
+          return yield* gitManagerError(
+            "preparePullRequestThread",
+            `The pull request base '${pullRequest.baseBranch}' was fetched but could not be resolved.`,
+          );
+        }
+        return fetchedCommit;
+      });
 
       if (input.mode === "local") {
         yield* gitHubCli.checkoutPullRequest({
@@ -1785,6 +1866,8 @@ export const makeGitManager = Effect.gen(function* () {
         };
       }
 
+      const targetResolvedCommit = yield* resolvePullRequestBaseCommit();
+
       const ensureExistingWorktreeUpstream = (worktreePath: string) =>
         Effect.gen(function* () {
           const details = yield* gitCore.statusDetails(worktreePath);
@@ -1807,15 +1890,17 @@ export const makeGitManager = Effect.gen(function* () {
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
       const managedPathExists = managedWorktreePath
-        ? yield* fileSystem.exists(managedWorktreePath).pipe(
-            Effect.mapError((cause) =>
-              gitManagerError(
-                "preparePullRequestThread",
-                `Could not inspect the managed worktree path '${managedWorktreePath}'.`,
-                cause,
+        ? yield* fileSystem
+            .exists(managedWorktreePath)
+            .pipe(
+              Effect.mapError((cause) =>
+                gitManagerError(
+                  "preparePullRequestThread",
+                  `Could not inspect the managed worktree path '${managedWorktreePath}'.`,
+                  cause,
+                ),
               ),
-            ),
-          )
+            )
         : false;
 
       const rejectManagedPathMismatch = (
@@ -1831,15 +1916,19 @@ export const makeGitManager = Effect.gen(function* () {
           return Effect.void;
         }
         if (existingWorktreePath) {
-          return gitManagerError(
-            "preparePullRequestThread",
-            `The pull request branch is already checked out in another worktree at '${existingWorktreePath}'.`,
+          return Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              `The pull request branch is already checked out in another worktree at '${existingWorktreePath}'.`,
+            ),
           );
         }
         if (managedPathExists) {
-          return gitManagerError(
-            "preparePullRequestThread",
-            `The managed worktree path '${managedWorktreePath}' is already occupied by an unrelated filesystem entry.`,
+          return Effect.fail(
+            gitManagerError(
+              "preparePullRequestThread",
+              `The managed worktree path '${managedWorktreePath}' is already occupied by an unrelated filesystem entry.`,
+            ),
           );
         }
         return Effect.void;
@@ -1883,6 +1972,7 @@ export const makeGitManager = Effect.gen(function* () {
           pullRequest,
           branch: localPullRequestBranch,
           worktreePath: existingBranchBeforeFetch.worktreePath,
+          targetResolvedCommit,
         };
       }
       if (existingBranchBeforeFetchPath === rootWorktreePath) {
@@ -1915,6 +2005,7 @@ export const makeGitManager = Effect.gen(function* () {
           pullRequest,
           branch: localPullRequestBranch,
           worktreePath: existingBranchAfterFetch.worktreePath,
+          targetResolvedCommit,
         };
       }
       if (existingBranchAfterFetchPath === rootWorktreePath) {
@@ -1935,6 +2026,7 @@ export const makeGitManager = Effect.gen(function* () {
         pullRequest,
         branch: worktree.worktree.branch,
         worktreePath: worktree.worktree.path,
+        targetResolvedCommit,
       };
     },
   );

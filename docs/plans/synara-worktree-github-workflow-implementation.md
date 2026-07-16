@@ -41,12 +41,12 @@ keep overlapping files serialized, and use isolated worktrees for parallel imple
 
 Use every model family below for substantive work, not ceremonial summaries:
 
-| Model | Effort | Best use in this initiative |
-| --- | --- | --- |
-| **Codex Sol** | medium/high | Repository inventory, mechanical contracts/plumbing, focused tests, migrations, and well-scoped fixes |
-| **Codex Terra** | high/xhigh | Cross-layer Git/orchestration architecture, lifecycle state machines, GitHub identity, and high-risk backend implementation |
-| **Sonnet** | high/xhigh | User-facing React implementation, context menus, interaction states, accessibility, and UI integration |
-| **Opus** | high/x-high | Initial plan challenge, high-complexity architecture/UX review, difficult debugging, and final independent review |
+| Model           | Effort      | Best use in this initiative                                                                                                 |
+| --------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Codex Sol**   | medium/high | Repository inventory, mechanical contracts/plumbing, focused tests, migrations, and well-scoped fixes                       |
+| **Codex Terra** | high/xhigh  | Cross-layer Git/orchestration architecture, lifecycle state machines, GitHub identity, and high-risk backend implementation |
+| **Sonnet**      | high/xhigh  | User-facing React implementation, context menus, interaction states, accessibility, and UI integration                      |
+| **Opus**        | high/x-high | Initial plan challenge, high-complexity architecture/UX review, difficult debugging, and final independent review           |
 
 Suggested first review pass:
 
@@ -96,15 +96,15 @@ Verification: ...
 
 Completion percentage is weighted progress, not the percentage of child tasks that have returned:
 
-| Phase | Weight |
-| --- | ---: |
-| 0. Review, drift audit, and baseline | 8% |
-| 1. Canonical GitHub/workspace/PR state and Git-status resilience | 22% |
-| 2. Sidebar ownership, hover states, and context menus | 18% |
-| 3. Workspace-scoped dev-server actions | 10% |
-| 4. Two-way Pull Request hub | 25% |
-| 5. Archive and restore lifecycle | 12% |
-| 6. Integrated QA, polish, and final verification | 5% |
+| Phase                                                            | Weight |
+| ---------------------------------------------------------------- | -----: |
+| 0. Review, drift audit, and baseline                             |     8% |
+| 1. Canonical GitHub/workspace/PR state and Git-status resilience |    22% |
+| 2. Sidebar ownership, hover states, and context menus            |    18% |
+| 3. Workspace-scoped dev-server actions                           |    10% |
+| 4. Two-way Pull Request hub                                      |    25% |
+| 5. Archive and restore lifecycle                                 |    12% |
+| 6. Integrated QA, polish, and final verification                 |     5% |
 
 Do not report a phase complete until its focused tests and exit criteria pass.
 
@@ -864,7 +864,7 @@ recommendation. Continue any independent safe work while waiting.
 - [ ] Local-only branches never render speculative GitHub links.
 - [ ] Published branch URLs are verified and valid.
 - [ ] Repositories with Git status output above 1 MB return bounded, explicitly partial Git state
-  without reporting uncertain state as clean.
+      without reporting uncertain state as clean.
 - [ ] File browsing remains usable when Git status fails, is slow, or is partial.
 - [ ] Status polling/broadcasting does not hot-loop on oversized repositories.
 - [ ] Worktree hover path opens Finder/File Explorer.
@@ -879,7 +879,7 @@ recommendation. Continue any independent safe work while waiting.
 - [ ] Focused and final verification pass.
 - [ ] Final Opus or Terra independent review has no unresolved high-severity findings.
 - [ ] User receives a final 100% report with changes, verification, known limitations, and any
-  intentionally deferred work.
+      intentionally deferred work.
 
 ## 19. Prompt to start the new Fable conversation
 

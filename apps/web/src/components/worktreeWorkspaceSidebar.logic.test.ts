@@ -76,9 +76,9 @@ describe("orderWorktreeWorkspacesForSidebar", () => {
     expect(getWorktreeWorkspaceSidebarLabel(workspace("root", { kind: "repository-root" }))).toBe(
       "Repository root",
     );
-    expect(getWorktreeWorkspaceSidebarLabel(workspace("feature", { title: "Seller catalog" }))).toBe(
-      "Seller catalog",
-    );
+    expect(
+      getWorktreeWorkspaceSidebarLabel(workspace("feature", { title: "Seller catalog" })),
+    ).toBe("Seller catalog");
   });
 });
 

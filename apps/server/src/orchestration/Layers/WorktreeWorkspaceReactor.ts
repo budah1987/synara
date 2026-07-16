@@ -103,12 +103,10 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     fileSystem.realPath(value).pipe(Effect.catch(() => Effect.succeed(path.resolve(value))));
 
   const readLegacyGitValue = (cwd: string, operation: string, args: readonly string[]) =>
-    git
-      .execute({ operation, cwd, args, allowNonZeroExit: true })
-      .pipe(
-        Effect.map((result) => (result.code === 0 ? result.stdout.trim() || null : null)),
-        Effect.catch(() => Effect.succeed(null)),
-      );
+    git.execute({ operation, cwd, args, allowNonZeroExit: true }).pipe(
+      Effect.map((result) => (result.code === 0 ? result.stdout.trim() || null : null)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
 
   const resolveLegacyProjectTargetRef = Effect.fn(function* (projectPath: string) {
     const remoteHead = yield* readLegacyGitValue(
@@ -160,11 +158,10 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           const workspaceId = legacyWorkspaceId(project.id, resolvedPath);
           const workspacePathExists = yield* fileSystem.exists(resolvedPath);
           const currentBranch = workspacePathExists
-            ? yield* readLegacyGitValue(
-                resolvedPath,
-                "WorktreeWorkspaceReactor.readLegacyBranch",
-                ["branch", "--show-current"],
-              )
+            ? yield* readLegacyGitValue(resolvedPath, "WorktreeWorkspaceReactor.readLegacyBranch", [
+                "branch",
+                "--show-current",
+              ])
             : null;
           const currentHead = workspacePathExists
             ? yield* readLegacyGitValue(resolvedPath, "WorktreeWorkspaceReactor.readLegacyHead", [
@@ -300,6 +297,7 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           ...(project.githubAccount ? { account: project.githubAccount } : {}),
         });
         refreshedPullRequest = prepared.pullRequest;
+        targetResolvedCommit = prepared.targetResolvedCommit ?? null;
         createdPath = prepared.worktreePath;
         createdBranch = prepared.branch;
         if (!createdPath) {
@@ -315,20 +313,22 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         createdFromCommit = createdHead;
 
         stage = "resolve-target";
-        const targetCandidates = [
-          prepared.pullRequest.baseBranch,
-          `origin/${prepared.pullRequest.baseBranch}`,
-        ];
-        for (const candidate of targetCandidates) {
-          const resolved = yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.resolvePullRequestTarget",
-            cwd: project.workspaceRoot,
-            args: ["rev-parse", "--verify", `${candidate}^{commit}`],
-            allowNonZeroExit: true,
-          });
-          if (resolved.code === 0 && resolved.stdout.trim()) {
-            targetResolvedCommit = resolved.stdout.trim();
-            break;
+        if (!targetResolvedCommit) {
+          const targetCandidates = [
+            prepared.pullRequest.baseBranch,
+            `origin/${prepared.pullRequest.baseBranch}`,
+          ];
+          for (const candidate of targetCandidates) {
+            const resolved = yield* git.execute({
+              operation: "WorktreeWorkspaceReactor.resolvePullRequestTarget",
+              cwd: project.workspaceRoot,
+              args: ["rev-parse", "--verify", `${candidate}^{commit}`],
+              allowNonZeroExit: true,
+            });
+            if (resolved.code === 0 && resolved.stdout.trim()) {
+              targetResolvedCommit = resolved.stdout.trim();
+              break;
+            }
           }
         }
         if (!targetResolvedCommit) {
@@ -560,10 +560,13 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     }).pipe(
       Effect.catch((cause) =>
         stage === "commit-completion"
-          ? Effect.logWarning("workspace archive completion dispatch failed; recovery remains pending", {
-              workspaceId: workspace.id,
-              cause: errorSummary(cause),
-            })
+          ? Effect.logWarning(
+              "workspace archive completion dispatch failed; recovery remains pending",
+              {
+                workspaceId: workspace.id,
+                cause: errorSummary(cause),
+              },
+            )
           : lifecycleFailure({ workspace, stage, cause }),
       ),
     );
@@ -612,16 +615,16 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
       if (workspace.kind === "managed") {
         stage = "create-worktree";
         if (yield* fileSystem.exists(workspace.path)) {
-          const actualBranch = (
-            yield* git.execute({
-              operation: "WorktreeWorkspaceReactor.restoreExistingBranch",
-              cwd: workspace.path,
-              args: ["branch", "--show-current"],
-            })
-          ).stdout.trim();
+          const actualBranch = (yield* git.execute({
+            operation: "WorktreeWorkspaceReactor.restoreExistingBranch",
+            cwd: workspace.path,
+            args: ["branch", "--show-current"],
+          })).stdout.trim();
           if (actualBranch !== workspace.branch) {
             return yield* Effect.fail(
-              new Error(`The occupied workspace path uses branch '${actualBranch || "detached HEAD"}'.`),
+              new Error(
+                `The occupied workspace path uses branch '${actualBranch || "detached HEAD"}'.`,
+              ),
             );
           }
         } else {
@@ -634,13 +637,11 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
           restoredPath = result.worktree.path;
           restoredBranch = result.worktree.branch;
         }
-        restoredHead = (
-          yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.restoreHead",
-            cwd: restoredPath,
-            args: ["rev-parse", "HEAD"],
-          })
-        ).stdout.trim();
+        restoredHead = (yield* git.execute({
+          operation: "WorktreeWorkspaceReactor.restoreHead",
+          cwd: restoredPath,
+          args: ["rev-parse", "HEAD"],
+        })).stdout.trim();
 
         stage = "setup";
         const setupScripts = project.scripts.filter((script) => script.runOnWorktreeCreate);
@@ -650,20 +651,16 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
         setupStatus = setupScripts.length > 0 ? "succeeded" : "skipped";
       } else if (workspace.kind === "external") {
         stage = "verify-external";
-        restoredHead = (
-          yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.restoreExternalHead",
-            cwd: restoredPath,
-            args: ["rev-parse", "HEAD"],
-          })
-        ).stdout.trim();
-        restoredBranch = (
-          yield* git.execute({
-            operation: "WorktreeWorkspaceReactor.restoreExternalBranch",
-            cwd: restoredPath,
-            args: ["branch", "--show-current"],
-          })
-        ).stdout.trim();
+        restoredHead = (yield* git.execute({
+          operation: "WorktreeWorkspaceReactor.restoreExternalHead",
+          cwd: restoredPath,
+          args: ["rev-parse", "HEAD"],
+        })).stdout.trim();
+        restoredBranch = (yield* git.execute({
+          operation: "WorktreeWorkspaceReactor.restoreExternalBranch",
+          cwd: restoredPath,
+          args: ["branch", "--show-current"],
+        })).stdout.trim();
       } else {
         return yield* Effect.fail(
           new Error(`Workspace kind '${workspace.kind}' cannot be restored.`),
@@ -689,10 +686,13 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
     }).pipe(
       Effect.catch((cause) =>
         stage === "commit-completion"
-          ? Effect.logWarning("workspace restore completion dispatch failed; recovery remains pending", {
-              workspaceId: workspace.id,
-              cause: errorSummary(cause),
-            })
+          ? Effect.logWarning(
+              "workspace restore completion dispatch failed; recovery remains pending",
+              {
+                workspaceId: workspace.id,
+                cause: errorSummary(cause),
+              },
+            )
           : lifecycleFailure({ workspace, stage, cause }),
       ),
     );
@@ -732,7 +732,8 @@ export const makeWorktreeWorkspaceReactor = Effect.gen(function* () {
               workspaceId: event.payload.workspaceId,
               projectId: event.payload.projectId,
             })
-          : event.type === "workspace.archive-requested" ||
+          : event.type === "workspace.provision-requested" ||
+              event.type === "workspace.archive-requested" ||
               event.type === "workspace.restore-requested"
             ? orchestrationEngine.getReadModel().pipe(
                 Effect.flatMap((readModel) => {

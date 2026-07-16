@@ -240,7 +240,7 @@ export function ArchivedWorkspacesDialog({
             pendingWorkspaceIds={pendingWorkspaceIds}
             restoreErrorsByWorkspaceId={restoreErrorsByWorkspaceId}
             onRestore={onRestore}
-            onRetry={onRetry}
+            {...(onRetry ? { onRetry } : {})}
           />
         </DialogPanel>
 

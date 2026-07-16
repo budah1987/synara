@@ -477,6 +477,7 @@ export function projectEvent(
         }),
       );
 
+    case "workspace.provision-requested":
     case "workspace.archive-requested":
     case "workspace.restore-requested":
       return decodeForEvent(
@@ -493,7 +494,12 @@ export function projectEvent(
             activeOperation: {
               id: payload.operationId,
               generation: payload.generation,
-              kind: event.type === "workspace.archive-requested" ? "archive" : "restore",
+              kind:
+                event.type === "workspace.archive-requested"
+                  ? "archive"
+                  : event.type === "workspace.restore-requested"
+                    ? "restore"
+                    : "provision",
               stage:
                 event.type === "workspace.archive-requested" && payload.confirmedWarnings
                   ? "intent-confirmed"

@@ -175,9 +175,9 @@ export type ProjectCreateLocalFilePreviewGrantResult =
 // `project.devServerEvent` push channel so every client stays in sync across
 // reconnects.
 
-const ProjectDevServerWorkspaceId = Schema.optional(
-  Schema.NullOr(WorktreeWorkspaceId),
-).pipe(Schema.withDecodingDefault(() => null));
+const ProjectDevServerWorkspaceId = Schema.optional(Schema.NullOr(WorktreeWorkspaceId)).pipe(
+  Schema.withDecodingDefault(() => null),
+);
 
 export const ProjectDevServerTarget = Schema.Struct({
   projectId: ProjectId,
