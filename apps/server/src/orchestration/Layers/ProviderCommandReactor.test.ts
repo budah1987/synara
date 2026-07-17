@@ -24,6 +24,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -2393,6 +2394,51 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("renames a generic worktree conversation title on its first turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.succeed({
+        title: "Fix worktree tab titles",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-worktree-conversation-title-generic"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New conversation",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-worktree-conversation-turn-start-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-conversation-title-1"),
+          role: "user",
+          text: "Fix conversation tabs that never get named in worktrees",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        "Fix worktree tab titles"
+      );
+    });
+  });
+
   it("uses the configured text generation model for providers without native title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
@@ -2401,6 +2447,7 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
+    const messageText = "Summarize provider startup failures without Codex";
     harness.generateThreadTitle.mockImplementation(() =>
       Effect.succeed({
         title: "Provider startup failures",
@@ -2412,7 +2459,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-title-antigravity-generated"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Summarize provider startup failures without Codex",
+        title: buildPromptThreadTitleFallback(messageText),
       }),
     );
 
@@ -2424,7 +2471,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-antigravity-generated-title-1"),
           role: "user",
-          text: "Summarize provider startup failures without Codex",
+          text: messageText,
           attachments: [],
         },
         modelSelection: {
@@ -2439,7 +2486,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
     expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
-      message: "Summarize provider startup failures without Codex",
+      message: messageText,
       modelSelection: {
         provider: "codex",
       },
@@ -2461,6 +2508,7 @@ describe("ProviderCommandReactor", () => {
       },
     });
     const now = new Date().toISOString();
+    const messageText = "Summarize provider startup failures without Codex";
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2479,7 +2527,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-antigravity-title-1"),
           role: "user",
-          text: "Summarize provider startup failures without Codex",
+          text: messageText,
           attachments: [],
         },
         modelSelection: {
@@ -2496,7 +2544,7 @@ describe("ProviderCommandReactor", () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
         readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
-        "Summarize provider startup failures without Codex"
+        buildPromptThreadTitleFallback(messageText)
       );
     });
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);

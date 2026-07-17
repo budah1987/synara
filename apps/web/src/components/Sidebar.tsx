@@ -82,7 +82,10 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerLocalServerProcess,
 } from "@synara/contracts";
-import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import {
+  GENERIC_WORKSPACE_CONVERSATION_TITLE,
+  isGenericChatThreadTitle,
+} from "@synara/shared/chatThreads";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@synara/shared/localServers";
@@ -3088,7 +3091,7 @@ export default function Sidebar() {
           commandId: newCommandId(),
           workspaceId,
           threadId,
-          title: "New conversation",
+          title: GENERIC_WORKSPACE_CONVERSATION_TITLE,
           modelSelection,
           runtimeMode: "full-access",
           interactionMode: "default",

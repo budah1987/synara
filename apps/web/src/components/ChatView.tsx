@@ -47,6 +47,7 @@ import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
+  GENERIC_WORKSPACE_CONVERSATION_TITLE,
 } from "@synara/shared/chatThreads";
 import {
   resolveThreadWorkspaceState,
@@ -10129,7 +10130,7 @@ export default function ChatView({
         commandId: newCommandId(),
         workspaceId,
         threadId: nextThreadId,
-        title: "New conversation",
+        title: GENERIC_WORKSPACE_CONVERSATION_TITLE,
         modelSelection: activeThread.modelSelection,
         runtimeMode: activeThread.runtimeMode,
         interactionMode: activeThread.interactionMode,
