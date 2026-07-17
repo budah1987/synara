@@ -45,6 +45,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { SlidingSegmentedControl } from "./ui/SlidingSegmentedControl";
 import { Spinner } from "./ui/spinner";
 import {
   pullRequestsExactInvolvementQueryOptions,
@@ -69,10 +70,10 @@ interface WorktreeWorkspaceCreateDialogProps {
 }
 
 const SOURCE_OPTIONS = [
-  { kind: "new-branch", label: "New branch" },
-  { kind: "branch", label: "Existing branch" },
-  { kind: "pull-request", label: "Pull request" },
-] as const;
+  { value: "new-branch", label: "New branch" },
+  { value: "branch", label: "Existing branch" },
+  { value: "pull-request", label: "Pull request" },
+] as const satisfies readonly { value: WorkspaceCreateSource["kind"]; label: string }[];
 
 const EMPTY_WORKTREE_WORKSPACES: readonly OrchestrationWorktreeWorkspace[] = [];
 
@@ -376,7 +377,7 @@ export function WorktreeWorkspaceCreateDialog({
             GitHub pull request.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="grid gap-4">
+        <DialogPanel className="grid gap-4 !pt-2">
           <label className="grid gap-1.5">
             <span className="text-xs font-medium text-foreground">Workspace name</span>
             <Input
@@ -391,42 +392,30 @@ export function WorktreeWorkspaceCreateDialog({
             />
           </label>
 
-          <fieldset className="grid gap-2">
+          <fieldset className="grid gap-2.5">
             <legend className="text-xs font-medium text-foreground">Create from</legend>
-            <div className="grid grid-cols-3 rounded-lg bg-muted/45 p-0.5">
-              {SOURCE_OPTIONS.map((option) => (
-                <button
-                  key={option.kind}
-                  type="button"
-                  aria-pressed={sourceKind === option.kind}
-                  className={cn(
-                    "rounded-md px-2 py-1.5 text-xs outline-none transition-[background-color,color,box-shadow] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                    sourceKind === option.kind
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                  onClick={() => {
-                    setSourceKind(option.kind);
-                    setError(null);
-                    if (option.kind !== "pull-request") {
-                      setPullRequestReference("");
-                    }
-                    if (option.kind === "new-branch") {
-                      setTargetRef(repositoryTargetRef);
-                      setBranchQuery("");
-                    }
-                    if (option.kind === "branch" && selectedBranch?.worktreePath) {
-                      const availableBranch = branchOptions.find(
-                        (branch) => branch.worktreePath == null,
-                      );
-                      setTargetRef(availableBranch?.name ?? "");
-                    }
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+            <SlidingSegmentedControl
+              value={sourceKind}
+              options={SOURCE_OPTIONS}
+              ariaLabel="Workspace source"
+              onValueChange={(nextSourceKind) => {
+                setSourceKind(nextSourceKind);
+                setError(null);
+                if (nextSourceKind !== "pull-request") {
+                  setPullRequestReference("");
+                }
+                if (nextSourceKind === "new-branch") {
+                  setTargetRef(repositoryTargetRef);
+                  setBranchQuery("");
+                }
+                if (nextSourceKind === "branch" && selectedBranch?.worktreePath) {
+                  const availableBranch = branchOptions.find(
+                    (branch) => branch.worktreePath == null,
+                  );
+                  setTargetRef(availableBranch?.name ?? "");
+                }
+              }}
+            />
           </fieldset>
 
           <DisclosureRegion open={sourceKind === "new-branch"}>

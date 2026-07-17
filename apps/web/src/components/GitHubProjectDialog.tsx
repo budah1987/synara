@@ -20,6 +20,7 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
+import { SlidingSegmentedControl } from "./ui/SlidingSegmentedControl";
 import { Spinner } from "./ui/spinner";
 
 interface GitHubProjectDialogProps {
@@ -33,6 +34,11 @@ interface GitHubProjectDialogProps {
 }
 
 type RepositoryEntryMode = "search" | "paste";
+
+const REPOSITORY_ENTRY_OPTIONS = [
+  { value: "search", label: "Search GitHub" },
+  { value: "paste", label: "Paste URL" },
+] as const satisfies readonly { value: RepositoryEntryMode; label: string }[];
 
 function githubAccountKey(account: Pick<GitHubAccountSummary, "host" | "login">): string {
   return `${account.host}/${account.login}`;
@@ -184,37 +190,17 @@ export function GitHubProjectDialog({
             URL. Synara keeps the managed checkout out of your way.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="grid gap-3.5">
-          <div
-            className="grid grid-cols-2 rounded-lg bg-muted/45 p-0.5"
-            aria-label="Repository input"
-          >
-            {(
-              [
-                ["search", "Search GitHub"],
-                ["paste", "Paste URL"],
-              ] as const
-            ).map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                aria-pressed={entryMode === mode}
-                className={cn(
-                  "rounded-md px-2 py-1.5 text-xs transition-[background-color,color,box-shadow] duration-150 ease-out motion-reduce:transition-none",
-                  entryMode === mode
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => {
-                  setEntryMode(mode);
-                  setRepository("");
-                  setError(null);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        <DialogPanel className="grid gap-3.5 !pt-2">
+          <SlidingSegmentedControl
+            value={entryMode}
+            options={REPOSITORY_ENTRY_OPTIONS}
+            ariaLabel="Repository input"
+            onValueChange={(mode) => {
+              setEntryMode(mode);
+              setRepository("");
+              setError(null);
+            }}
+          />
 
           <div className="grid gap-1.5">
             <span className="text-xs font-medium text-foreground">GitHub account</span>
@@ -234,7 +220,9 @@ export function GitHubProjectDialog({
                   placeholder={
                     isLoadingAccounts ? "Loading GitHub accounts…" : "No signed-in accounts"
                   }
-                />
+                >
+                  {selectedAccount?.login}
+                </SelectValue>
               </SelectTrigger>
               <SelectPopup alignItemWithTrigger={false} className="min-w-[var(--anchor-width)] p-1">
                 {accounts.map((account) => (
