@@ -26,7 +26,10 @@ import { GitManager, type GitManagerShape } from "../../git/Services/GitManager"
 import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { decideOrchestrationCommand } from "../decider";
 import { projectEvent } from "../projector";
-import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
+import {
+  OrchestrationEngineService,
+  type OrchestrationEngineShape,
+} from "../Services/OrchestrationEngine";
 import { WorktreeWorkspaceReactor } from "../Services/WorktreeWorkspaceReactor";
 import {
   resolveWorkspaceBranchProvisioning,
@@ -53,6 +56,30 @@ const runtimeSafetyLayer = Layer.merge(
     dispose: Effect.void,
   } satisfies TerminalManagerShape),
 );
+
+const orchestrationEngineRuntimeStubs = {
+  quiesce: Effect.void,
+  drain: Effect.void,
+  stop: Effect.void,
+  getProjectionCatchUpStatus: Effect.succeed({
+    state: "healthy" as const,
+    inFlight: false,
+    retryAttempts: 0,
+    lastFailure: null,
+  }),
+  readEventsThrough: () => Stream.empty,
+  getEventHighWaterSequence: Effect.succeed(0),
+  subscribeDomainEvents: Effect.succeed(Stream.empty),
+} satisfies Pick<
+  OrchestrationEngineShape,
+  | "quiesce"
+  | "drain"
+  | "stop"
+  | "getProjectionCatchUpStatus"
+  | "readEventsThrough"
+  | "getEventHighWaterSequence"
+  | "subscribeDomainEvents"
+>;
 
 const unusedGitManager = () => Effect.die("GitManager should not be used in this test");
 const gitManagerLayer = (
@@ -219,6 +246,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const commands: OrchestrationCommand[] = [];
       let sequence = readModel.snapshotSequence;
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.sync(() => readModel),
         dispatch: (command) =>
@@ -410,6 +438,7 @@ describe("WorktreeWorkspaceReactor", () => {
       };
       const commands: OrchestrationCommand[] = [];
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.succeed(readModel),
         dispatch: (command) =>
@@ -558,6 +587,7 @@ describe("WorktreeWorkspaceReactor", () => {
       };
       const commands: OrchestrationCommand[] = [];
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.succeed(readModel),
         dispatch: (command) =>
@@ -737,6 +767,7 @@ describe("WorktreeWorkspaceReactor", () => {
           };
         });
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.succeed(readModel),
         dispatch: (command) =>
@@ -903,6 +934,7 @@ describe("WorktreeWorkspaceReactor", () => {
       const commands: OrchestrationCommand[] = [];
       let prepareCalls = 0;
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.succeed(readModel),
         dispatch: (command) =>
@@ -1054,6 +1086,7 @@ describe("WorktreeWorkspaceReactor", () => {
       };
       const commands: OrchestrationCommand[] = [];
       const engineLayer = Layer.succeed(OrchestrationEngineService, {
+        ...orchestrationEngineRuntimeStubs,
         readEvents: () => Stream.empty,
         getReadModel: () => Effect.succeed(readModel),
         dispatch: (command) =>

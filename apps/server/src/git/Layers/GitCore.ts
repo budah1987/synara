@@ -50,6 +50,7 @@ const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const EMPTY_TREE_OBJECT_ID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
@@ -1032,6 +1033,65 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           parser.push(new TextEncoder().encode(result.stdout));
         }
         return parser.finish();
+      });
+
+    const repositoryMutationLocks = new Map<string, Semaphore.Semaphore>();
+    const repositoryMutationCounts = new Map<string, number>();
+    const repositoryMutationMapLock = yield* Semaphore.make(1);
+    const resolveRepositoryMutationKey = (cwd: string) =>
+      executeGit("GitCore.withMutation.commonDir", cwd, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ]).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((commonDir) =>
+          Effect.tryPromise(() => nodeFs.realpath(nodePath.resolve(cwd, commonDir))),
+        ),
+        Effect.catch(() =>
+          Effect.tryPromise(() => nodeFs.realpath(cwd)).pipe(
+            Effect.catch(() => Effect.succeed(nodePath.resolve(cwd))),
+          ),
+        ),
+      );
+    const withMutation: GitCoreShape["withMutation"] = (cwd, effect) =>
+      Effect.gen(function* () {
+        const key = yield* resolveRepositoryMutationKey(cwd);
+        const lock = yield* repositoryMutationMapLock.withPermit(
+          Effect.gen(function* () {
+            const count = repositoryMutationCounts.get(key) ?? 0;
+            if (count >= MAX_QUEUED_REPOSITORY_MUTATIONS) {
+              return yield* new GitCommandError({
+                operation: "GitCore.withMutation",
+                command: "repository mutation queue",
+                cwd,
+                detail: "Repository mutation queue is full.",
+              });
+            }
+            let existing = repositoryMutationLocks.get(key);
+            if (!existing) {
+              existing = yield* Semaphore.make(1);
+              repositoryMutationLocks.set(key, existing);
+            }
+            repositoryMutationCounts.set(key, count + 1);
+            return existing;
+          }),
+        );
+        return yield* lock.withPermit(effect).pipe(
+          Effect.ensuring(
+            repositoryMutationMapLock.withPermit(
+              Effect.sync(() => {
+                const remaining = (repositoryMutationCounts.get(key) ?? 1) - 1;
+                if (remaining <= 0) {
+                  repositoryMutationCounts.delete(key);
+                  repositoryMutationLocks.delete(key);
+                } else {
+                  repositoryMutationCounts.set(key, remaining);
+                }
+              }),
+            ),
+          ),
+        );
       });
 
     const readMoveAwareWorkingTreeSummary = (
@@ -2751,7 +2811,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     const stashDrop: GitCoreShape["stashDrop"] = (input) =>
-      executeGit("GitCore.stashDrop", input.cwd, ["stash", "drop"], {
+      executeGit("GitCore.stashDrop", input.cwd, ["stash", "drop", input.stashRef], {
         timeoutMs: 10_000,
         fallbackErrorMessage: "git stash drop failed",
       }).pipe(Effect.asVoid);
@@ -2880,6 +2940,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       });
 
     return {
+      withMutation,
       execute,
       status,
       statusDetails,

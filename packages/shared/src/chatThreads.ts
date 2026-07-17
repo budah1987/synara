@@ -39,7 +39,10 @@ export function truncateChatThreadTitle(
   if (maxLength <= 1) {
     return "…";
   }
-  return `${characters.slice(0, maxLength - 1).join("").trimEnd()}…`;
+  return `${characters
+    .slice(0, maxLength - 1)
+    .join("")
+    .trimEnd()}…`;
 }
 
 // Build a short deterministic title while the model-generated rename is pending.

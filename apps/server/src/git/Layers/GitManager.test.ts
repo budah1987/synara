@@ -300,13 +300,8 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
 
 function runStackedAction(
   manager: GitManagerShape,
-  input: {
-    cwd: string;
-    action: "commit" | "push" | "create_pr" | "commit_push" | "commit_push_pr";
+  input: Omit<Parameters<GitManagerShape["runStackedAction"]>[0], "actionId"> & {
     actionId?: string;
-    commitMessage?: string;
-    featureBranch?: boolean;
-    filePaths?: readonly string[];
   },
   options?: Parameters<GitManagerShape["runStackedAction"]>[1],
 ) {
@@ -1834,7 +1829,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         }),
       });
 
-      const result = yield* manager.runStackedAction({
+      const result = yield* runStackedAction(manager, {
         actionId: "explicit-account-and-base",
         cwd: repoDir,
         action: "commit_push_pr",

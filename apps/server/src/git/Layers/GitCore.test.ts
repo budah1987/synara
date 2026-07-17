@@ -897,7 +897,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["stash", "push", "-m", "test stash"]);
         expect(yield* git(tmp, ["stash", "list"])).toContain("test stash");
 
-        yield* core.stashDrop({ cwd: tmp });
+        yield* core.stashDrop({ cwd: tmp, stashRef: "stash@{0}" });
 
         expect((yield* git(tmp, ["stash", "list"])).trim()).toBe("");
       }),
@@ -1578,6 +1578,25 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(details.workingTree.isPartial).toBe(false);
         expect(details.workingTree.truncated).toBe(false);
         expect(details.workingTree.statisticsState).toBe("complete");
+      }),
+    );
+
+    it.effect("preserves adversarial filenames in status details", () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return;
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const fileName = "line\nbreak\tname.txt";
+        yield* writeTextFile(path.join(tmp, fileName), "before\n");
+        yield* git(tmp, ["add", "--", fileName]);
+        yield* git(tmp, ["commit", "-m", "add adversarial filename"]);
+        yield* writeTextFile(path.join(tmp, fileName), "after\nsecond\n");
+
+        const details = yield* (yield* GitCore).statusDetails(tmp);
+
+        expect(details.workingTree.files).toEqual([
+          { path: fileName, insertions: 2, deletions: 1 },
+        ]);
       }),
     );
 

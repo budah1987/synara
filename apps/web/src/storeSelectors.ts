@@ -57,11 +57,7 @@ export function createProjectSelector(
 export function createThreadSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => Thread | undefined {
-  return (state) =>
-    threadId
-      ? (getThreadFromState(state, threadId) ??
-        state.threads.find((thread) => thread.id === threadId))
-      : undefined;
+  return (state) => (threadId ? getThreadFromState(state, threadId) : undefined);
 }
 
 export function createAllThreadsSelector(): (state: AppState) => readonly Thread[] {
@@ -153,11 +149,7 @@ export function createThreadProjectIdSelector(
     if (!threadId) {
       return null;
     }
-    return (
-      state.threadShellById?.[threadId]?.projectId ??
-      state.threads.find((thread) => thread.id === threadId)?.projectId ??
-      null
-    );
+    return state.threadShellById?.[threadId]?.projectId ?? null;
   };
 }
 
@@ -168,7 +160,7 @@ export function createThreadGitHubAccountSelector(
     if (!threadId) return undefined;
     const projectId =
       state.threadShellById?.[threadId]?.projectId ??
-      state.threads.find((thread) => thread.id === threadId)?.projectId;
+      state.threads?.find((thread) => thread.id === threadId)?.projectId;
     return projectId
       ? (state.projects.find((project) => project.id === projectId)?.githubAccount ?? undefined)
       : undefined;
@@ -208,11 +200,7 @@ export function createThreadWorkspaceMetadataSelector(
 export function createThreadExistsSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => boolean {
-  return (state) =>
-    threadId
-      ? Boolean(state.threadShellById?.[threadId]) ||
-        state.threads.some((thread) => thread.id === threadId)
-      : false;
+  return (state) => (threadId ? Boolean(state.threadShellById?.[threadId]) : false);
 }
 
 export function createSidebarThreadSummarySelector(
@@ -229,14 +217,14 @@ export function createSidebarThreadSummariesSelector(): (
   let previousSummaries: readonly SidebarThreadSummary[] = [];
 
   return (state) => {
-    const threadIds = state.threadIds ?? state.threads.map((thread) => thread.id);
+    const threadIds = state.threadIds;
     if (threadIds === previousThreadIds && state.sidebarThreadSummaryById === previousSummaryById) {
       return previousSummaries;
     }
 
     previousThreadIds = threadIds;
     previousSummaryById = state.sidebarThreadSummaryById;
-    previousSummaries = threadIds.flatMap((threadId) => {
+    previousSummaries = (threadIds ?? []).flatMap((threadId) => {
       const summary = state.sidebarThreadSummaryById[threadId];
       return summary ? [summary] : [];
     });

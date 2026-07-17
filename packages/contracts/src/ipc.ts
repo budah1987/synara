@@ -4,6 +4,7 @@ import type {
   AuthBootstrapResult,
   AuthClientSession,
   AuthCreatePairingCredentialInput,
+  AuthLogoutResult,
   AuthPairingCredentialResult,
   AuthPairingLink,
   AuthRevokeClientSessionInput,
@@ -161,6 +162,10 @@ import type {
   OrchestrationGetFullThreadDiffResult,
   OrchestrationImportThreadInput,
   OrchestrationImportThreadResult,
+  OrchestrationListProviderDeliveryBlockersInput,
+  OrchestrationListProviderDeliveryBlockersResult,
+  OrchestrationReconcileProviderDeliveryInput,
+  OrchestrationReconcileProviderDeliveryResult,
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationGetCapabilitiesResult,
@@ -411,6 +416,11 @@ export interface SynaraStorageSnapshot {
 
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  /**
+   * Absolute filesystem path for a File from drag/drop or file inputs.
+   * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
+   */
+  getPathForFile?: (file: File) => string | null;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
     defaultFilename: string;
@@ -623,6 +633,7 @@ export interface NativeApi {
     listAuthClients: () => Promise<ReadonlyArray<AuthClientSession>>;
     revokeAuthClient: (input: AuthRevokeClientSessionInput) => Promise<{ revoked: boolean }>;
     revokeOtherAuthClients: () => Promise<{ revokedCount: number }>;
+    logoutAuthSession: () => Promise<AuthLogoutResult>;
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
@@ -683,6 +694,12 @@ export interface NativeApi {
       input: OrchestrationGetFullThreadDiffInput,
     ) => Promise<OrchestrationGetFullThreadDiffResult>;
     replayEvents: (fromSequenceExclusive: number) => Promise<OrchestrationEvent[]>;
+    listProviderDeliveryBlockers: (
+      input?: OrchestrationListProviderDeliveryBlockersInput,
+    ) => Promise<OrchestrationListProviderDeliveryBlockersResult>;
+    reconcileProviderDelivery: (
+      input: OrchestrationReconcileProviderDeliveryInput,
+    ) => Promise<OrchestrationReconcileProviderDeliveryResult>;
     subscribeShell: () => Promise<void>;
     unsubscribeShell: () => Promise<void>;
     subscribeWorkspaceShell: () => Promise<void>;
