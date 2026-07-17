@@ -10111,6 +10111,12 @@ export default function ChatView({
       search: (previous) => ({ ...stripDiffSearchParams(previous), view: "editor" }),
     });
   }, [activeProjectIdForNewChat, handleNewThread]);
+  const onNewProjectChat = useCallback(() => {
+    if (!activeProjectIdForNewChat) {
+      return;
+    }
+    void handleNewThread(activeProjectIdForNewChat);
+  }, [activeProjectIdForNewChat, handleNewThread]);
   const onNewWorkspaceChat = useCallback(async () => {
     if (!activeThread?.workspaceId) return;
     const api = readNativeApi();
@@ -10196,7 +10202,7 @@ export default function ChatView({
     },
     [onNavigateToThread, storeOpenChatThreadPage],
   );
-  const onCloseWorkspaceChat = useCallback(
+  const onCloseConversationTab = useCallback(
     async (closingThreadId: ThreadId, nextThreadId: ThreadId | null): Promise<boolean> => {
       const closingThread = getThreadFromState(useStore.getState(), closingThreadId);
       if (!closingThread) return false;
@@ -10225,8 +10231,12 @@ export default function ChatView({
         if (wasActive) {
           if (nextThreadId) {
             onOpenEditorChat(nextThreadId);
-          } else {
+          } else if (closingThread.workspaceId) {
             await onNewWorkspaceChat();
+          } else if (isEditorRail) {
+            onNewEditorChat();
+          } else {
+            onNewProjectChat();
           }
         }
         toastManager.add({
@@ -10269,7 +10279,16 @@ export default function ChatView({
         return false;
       }
     },
-    [activeThread?.id, navigate, onNavigateToThread, onNewWorkspaceChat, onOpenEditorChat],
+    [
+      activeThread?.id,
+      isEditorRail,
+      navigate,
+      onNavigateToThread,
+      onNewEditorChat,
+      onNewProjectChat,
+      onNewWorkspaceChat,
+      onOpenEditorChat,
+    ],
   );
   const onReopenWorkspaceChat = useCallback(
     async (threadId: ThreadId): Promise<boolean> => {
@@ -11267,7 +11286,7 @@ export default function ChatView({
                 : null
           }
           editorChatControls={
-            (isEditorRail || activeThread.workspaceId !== null) && activeProject
+            activeProject
               ? {
                   projectId: activeProject.id,
                   workspaceId: activeThread.workspaceId
@@ -11279,7 +11298,9 @@ export default function ChatView({
                   menuActionsEnabled: isFocusedPane,
                   onNewChat: activeThread.workspaceId
                     ? () => void onNewWorkspaceChat()
-                    : onNewEditorChat,
+                    : isEditorRail
+                      ? onNewEditorChat
+                      : onNewProjectChat,
                   onNewTerminal: onOpenEditorTerminal,
                   onOpenChat: onOpenEditorChat,
                   onOpenTerminal: onOpenEditorTerminal,
@@ -11287,7 +11308,7 @@ export default function ChatView({
                   onRenameChat: (targetThreadId, title) =>
                     setRenameThreadTarget({ threadId: targetThreadId, title }),
                   onCloseChat: (targetThreadId, nextThreadId) =>
-                    onCloseWorkspaceChat(targetThreadId, nextThreadId),
+                    onCloseConversationTab(targetThreadId, nextThreadId),
                   onReopenChat: onReopenWorkspaceChat,
                 }
               : null
