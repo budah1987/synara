@@ -4,7 +4,6 @@
 // Depends on: Vitest and browserUsePipeServer path resolution exports
 
 import { basename, dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,8 +16,9 @@ describe("browser-use pipe path resolution", () => {
   it("creates a discoverable unix socket path under the Codex browser-use directory", () => {
     const pipePath = resolveDefaultBrowserUsePipePath("darwin");
 
-    expect(dirname(pipePath)).toBe(`${tmpdir()}/codex-browser-use`);
+    expect(dirname(pipePath)).toBe("/tmp/codex-browser-use");
     expect(basename(pipePath)).toMatch(/^synara-iab-\d+\.sock$/);
+    expect(Buffer.byteLength(pipePath)).toBeLessThanOrEqual(104);
   });
 
   it("prefers an explicit Synara pipe path from the environment", () => {

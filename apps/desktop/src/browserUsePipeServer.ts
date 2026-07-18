@@ -19,6 +19,10 @@ const BROWSER_USE_PANEL_READY_TIMEOUT_MS = 2_000;
 const BROWSER_USE_PANEL_READY_POLL_MS = 50;
 const BROWSER_USE_PIPE_DIR = "codex-browser-use";
 const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
+// macOS limits AF_UNIX socket paths to a small fixed number of bytes. The
+// per-user temp directory can already consume most of that budget, so keep
+// the default endpoint under /tmp instead of appending to OS.tmpdir().
+const BROWSER_USE_MACOS_PIPE_ROOT = "/tmp";
 export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
 
 type BrowserUseRpcId = string | number;
@@ -44,8 +48,9 @@ export function resolveDefaultBrowserUsePipePath(platform = process.platform): s
   if (platform === "win32") {
     return String.raw`\\.\pipe\codex-browser-use-${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}`;
   }
+  const pipeRoot = platform === "darwin" ? BROWSER_USE_MACOS_PIPE_ROOT : OS.tmpdir();
   return Path.join(
-    OS.tmpdir(),
+    pipeRoot,
     BROWSER_USE_PIPE_DIR,
     `${BROWSER_USE_PIPE_NAME_PREFIX}-${process.pid}.sock`,
   );
