@@ -153,10 +153,10 @@ layer("reconcileMigrationLineage", (it) => {
   );
 });
 
-const synara2LegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const importedDesktopLineageLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-synara2LegacyLayer("Synara2 private migration lineage", (it) => {
-  it.effect("renumbers private migrations 54-56 without losing their schema or data", () =>
+importedDesktopLineageLayer("imported desktop migration lineage", (it) => {
+  it.effect("renumbers migrations 54-56 without losing their schema or data", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 53 });
@@ -193,6 +193,33 @@ synara2LegacyLayer("Synara2 private migration lineage", (it) => {
       `;
       assert.strictEqual(pins[0]?.count, 1);
       assert.include(yield* projectionThreadsColumnNames(sql), "workspace_id");
+    }),
+  );
+
+  it.effect("replays safely when the schema is newer than the imported tracker", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations();
+
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 54`;
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name) VALUES
+          (54, 'ProjectPullRequestPins'),
+          (55, 'WorktreeWorkspaces'),
+          (56, 'ProjectionProjectsGitHubAccount')
+      `;
+
+      const executed = yield* runMigrations();
+      assert.deepStrictEqual(
+        executed.map(([id]) => id),
+        migrationEntries.map(([id]) => id).filter((id) => id >= 54),
+      );
+
+      const rows = yield* trackerRows(sql);
+      assert.deepStrictEqual(
+        rows.map((row) => [row.migration_id, row.name]),
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
     }),
   );
 });
