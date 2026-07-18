@@ -3188,7 +3188,10 @@ function createWindow(): BrowserWindow {
     ...restoredBounds,
     minWidth: 840,
     minHeight: 620,
-    show: false,
+    // Keep a native window visible while the packaged renderer loads. macOS
+    // can automatically terminate an app that has no visible windows during
+    // the startup gap before `ready-to-show`.
+    show: true,
     autoHideMenuBar: true,
     ...getIconOption(),
     title: APP_DISPLAY_NAME,
